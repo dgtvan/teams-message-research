@@ -19,6 +19,7 @@ import {
   hashContent,
   openConversation,
   sendMessage as sendMessageInPage,
+  sendMessageViaRest,
   toObservedMessages,
   type DiscoveredConversation,
 } from "./teams.js";
@@ -90,6 +91,15 @@ function toBigIntOrNull(id: string | null | undefined): bigint | null {
 //      the signature of an attachment-only message (a real reaction has
 //      an empty SENDER too, and never reaches recordObservedMessage —
 //      see trouter.ts, so this can't misfire on those).
+//   1b. Any push (new or edit) carrying an inline image alongside real
+//      text (trouter.ts's hasInlineImage) — content isn't empty here, so
+//      (1) alone doesn't catch it, but push still can't carry the actual
+//      image bytes, only the plain-text part. Confirmed live: without
+//      this, a "123"/image + "456"/image + "789"/image message sat on the
+//      normal interval-based rotation instead of being prioritized, and
+//      went unresolved for 8+ minutes (past the 5min+jitter backup
+//      interval) on a busy day where other conversations' own churn kept
+//      pushing it back in the queue.
 //   2. An EDIT (or any push) to a message whose previous revision had
 //      attachment markers — push's own content for the edit is always
 //      attachment-blind, so if we just recorded push's version straight
@@ -198,8 +208,18 @@ function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener, onMe
   // content can never account for those — its content is always
   // attachment-blind — so treat that the same as the empty-content case
   // regardless of push kind, most importantly for an edit.
+  //
+  // Separately again: a message that mixes real text with an inline image
+  // (hasInlineImage, see trouter.ts) has non-empty content, so neither
+  // check above catches it — but push's plain-text content still can't
+  // carry the image itself, so it's the same "needs a DOM pass" case.
   const droppedKnownAttachments = !!rev && !!priorRevision?.content.includes("[[ATTACHMENT|");
-  if ((pushed.kind === "new" && pushed.content === "" && pushed.sender) || droppedKnownAttachments) {
+  const pushedInlineImage = !!pushed.sender && pushed.hasInlineImage;
+  if (
+    (pushed.kind === "new" && pushed.content === "" && pushed.sender) ||
+    droppedKnownAttachments ||
+    pushedInlineImage
+  ) {
     pendingResolutionConversations.add(pushed.conversationId);
     let pendingMessages = pendingResolutionMessagesByConversation.get(pushed.conversationId);
     if (!pendingMessages) {
@@ -279,7 +299,7 @@ async function extractAndRecordNew(
   // have. Mutates each raw message's content in place before it's turned
   // into an ObservedMessage.
   for (const msg of raw) {
-    msg.content += resolveAttachmentMarkers(msg.messageId, msg.attachments, msg.images);
+    msg.content = resolveAttachmentMarkers(msg.content, msg.messageId, msg.attachments, msg.images);
   }
   const observed = toObservedMessages(conversationId, raw, new Date().toISOString());
 
@@ -402,21 +422,32 @@ export async function catchUpAllTracked(
 }
 
 /**
- * Sends a message from the dashboard's chatbox — queued through withPage
- * like any other operation against the shared tab, so it can't run
- * concurrently with a scheduled visit or catch-up and end up typing into
- * whichever conversation happened to be open for a different reason.
+ * Sends a message from the dashboard's chatbox.
  *
- * Deliberately does NOT record the sent message itself into the DB here:
- * Teams' own real-time push (trouter.ts) will deliver it back as a genuine
- * "new message" event within moments, same as anything anyone else sends,
- * which keeps this on the one code path that already handles ownership
- * checks, watermark advancement, and dashboard notification correctly —
- * duplicating that logic here would just be two places that could drift
- * out of sync with each other.
+ * Tries the REST fast path first (see sendMessageViaRest in teams.ts) —
+ * outside withPage's queue entirely, since it never touches the page's
+ * DOM/navigation state and so can't collide with an in-flight visit. Only
+ * on that failing (no cached token, expired, network error) does this fall
+ * back to the DOM-typing path, which DOES need withPage: it can't run
+ * concurrently with a scheduled visit or catch-up without risking typing
+ * into whichever conversation happened to be open for a different reason.
+ *
+ * Deliberately does NOT record the sent message itself into the DB here,
+ * on either path: Teams' own real-time push (trouter.ts) will deliver it
+ * back as a genuine "new message" event within moments, same as anything
+ * anyone else sends, which keeps this on the one code path that already
+ * handles ownership checks, watermark advancement, and dashboard
+ * notification correctly — duplicating that logic here would just be two
+ * places that could drift out of sync with each other.
  */
 export async function sendMessageTo(page: Page, conversationId: string, text: string): Promise<void> {
+  const t0 = Date.now();
+  if (await sendMessageViaRest(page, conversationId, text)) {
+    console.log(`[send] REST fast path for "${conversationId}" took ${Date.now() - t0}ms`);
+    return;
+  }
   await withPage(() => sendMessageInPage(page, conversationId, text));
+  console.log(`[send] DOM fallback for "${conversationId}" took ${Date.now() - t0}ms total`);
 }
 
 // Deterministic per-conversation offset (0-30% of the interval), so

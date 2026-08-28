@@ -143,6 +143,60 @@ export function hashContent(content: string): string {
 }
 
 /**
+ * In-memory cache of a chatsvc bearer token, captured off the Authorization
+ * header of any real chatsvc request this page makes — either one of our
+ * own REST fast-path sends (self-perpetuating: each send re-caches the
+ * token it used) or the DOM path's compose-box POST below (so the first
+ * send after a restart, which has no cached token yet and must fall back
+ * to the slow DOM path, still warms the cache as a side effect, making
+ * every send after it eligible for the fast path again). Confirmed live
+ * this is necessary, not just belt-and-suspenders: reading a pre-existing
+ * token out of localStorage (an earlier version of this) only worked
+ * because that debug session happened to be ~20 minutes old already: a
+ * freshly restarted session's localStorage has no chatsvcagg-scoped token
+ * yet, and driving the DOM compose box directly (fill + Enter, no
+ * different from what sendMessage below already does) does NOT cause one
+ * to appear there either — confirmed live across two separate attempts
+ * ~45s apart. Whatever mechanism actually mints and caches that token in
+ * long-lived localStorage runs on its own schedule, not in response to a
+ * send — so the only reliable source is capturing it directly off a live
+ * request as it goes out, not fishing for it in storage after the fact.
+ */
+let cachedToken: { secret: string; expiresAtMs: number } | null = null;
+const tokenListenerAttached = new WeakSet<Page>();
+
+function decodeJwtExpiryMs(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const exp = JSON.parse(json).exp;
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Idempotent per page — a second call on the same page is a no-op. */
+function ensureChatTokenCapture(page: Page): void {
+  if (tokenListenerAttached.has(page)) return;
+  tokenListenerAttached.add(page);
+  page.on("request", (req) => {
+    if (req.method() !== "POST" || !req.url().includes("/api/chatsvc/")) return;
+    const auth = req.headers()["authorization"];
+    const token = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!token) return;
+    const expiresAtMs = decodeJwtExpiryMs(token) ?? Date.now() + 5 * 60_000;
+    cachedToken = { secret: token, expiresAtMs };
+  });
+}
+
+function getCachedChatServiceToken(): string | null {
+  const minRemainingMs = 60_000;
+  if (!cachedToken || cachedToken.expiresAtMs - Date.now() < minRemainingMs) return null;
+  return cachedToken.secret;
+}
+
+/**
  * Sends a message from the dashboard's chatbox: opens the conversation
  * (same as any other visit) and types into the real compose box, exactly
  * as if you'd typed it yourself in Teams — this account's own send, not a
@@ -155,7 +209,89 @@ export function hashContent(content: string): string {
  * test send used to verify the catch-up fix earlier — Playwright treats it
  * like any other editable element, no special-casing needed.
  */
+
+function toComposeHtml(text: string): string {
+  return `<p>${text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>")}</p>`;
+}
+
+/**
+ * Fast path for sending: POSTs straight to Teams' own chatsvc REST API
+ * using the bearer token above, instead of opening the conversation and
+ * typing into the compose box. Confirmed live: completes in under a
+ * second (808ms round trip observed), vs. several seconds for the DOM path
+ * below, largely because it skips openConversation's click/wait-for-
+ * header/wait-for-stable-list sequence entirely — the message shows up
+ * back in the DOM afterward via Teams' own real-time push, same as any
+ * other message.
+ *
+ * Doesn't touch the page's rendered DOM or navigation state at all — the
+ * token cache is plain in-memory state, and page.request is a
+ * context-level API independent of whatever conversation happens to be
+ * open — so this is safe for callers to run WITHOUT queuing behind
+ * withPage's shared-tab lock (see sendMessageTo in watcher/index.ts). It
+ * can't collide with an in-flight visit the way typing into the compose
+ * box could.
+ *
+ * Never throws: returns false on anything short of a clean success (no
+ * cached token, a non-OK response, a network error), so callers can
+ * silently fall back to the slower but more resilient DOM path below.
+ */
+export async function sendMessageViaRest(page: Page, conversationId: string, text: string): Promise<boolean> {
+  try {
+    ensureChatTokenCapture(page);
+    const token = getCachedChatServiceToken();
+    if (!token) {
+      console.log("[send] no cached chatsvc token found (cold cache or expired)");
+      return false;
+    }
+
+    const body = {
+      id: "-1",
+      type: "Message",
+      conversationid: conversationId,
+      conversationLink: `blah/${conversationId}`,
+      messagetype: "RichText/Html",
+      contenttype: "Text",
+      content: toComposeHtml(text),
+      clientmessageid: `${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      properties: { importance: "", subject: "", cards: "[]", links: "[]", mentions: "[]", files: "[]" },
+    };
+
+    // "au" is this account's own region prefix (confirmed live by
+    // capturing a real send's request URL) — not a general Teams API
+    // constant. A different tenant/region would need this adjusted.
+    const res = await page.request.post(
+      `https://teams.microsoft.com/api/chatsvc/au/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages`,
+      {
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          behavioroverride: "redirectAs404",
+        },
+        data: JSON.stringify(body),
+        timeout: 8000,
+      }
+    );
+    if (!res.ok()) {
+      console.log(`[send] REST attempt got non-OK status ${res.status()}`);
+    }
+    return res.ok();
+  } catch (err) {
+    console.log(`[send] REST attempt threw: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 export async function sendMessage(page: Page, conversationId: string, text: string): Promise<void> {
+  // Piggybacks the token-capture listener on this path too, so a send that
+  // has to fall back here (no cached token yet) still warms the cache as a
+  // side effect — the compose box's own POST to chatsvc carries a bearer
+  // token same as the REST fast path's own requests do.
+  ensureChatTokenCapture(page);
   await openConversation(page, conversationId);
   const editor = page.locator(selectors.composeBox);
   await editor.click();
@@ -237,6 +373,27 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
         const quoteCard = bodyEl?.querySelector(args.quotedReplyCard) ?? null;
         let quote: { author: string; timestamp: string; text: string } | null = null;
         let content: string;
+
+        // Declared here — before content is built, not after (contrast
+        // with the old layout) — so the plain-text branch below can push
+        // into them itself while walking the body's own children. That's
+        // what lets a pasted image end up as a PENDING_ATTACHMENT
+        // placeholder sitting exactly where it was in the message, instead
+        // of the old approach: read all the text first via one
+        // bodyEl.innerText call, separately query the WHOLE body for every
+        // image afterward, and always report them trailing all the text
+        // regardless of which line they were actually under. Confirmed
+        // live: a "123"/image, "456"/image, "789"/image message (three
+        // separate paragraphs, one image pasted under each) rendered as
+        // "123 456 789" followed by all three images bundled in one block
+        // — technically nothing was lost, but nothing lined up with Teams'
+        // own per-line layout either. attachments.ts resolves
+        // PENDING_ATTACHMENT back into a real [[ATTACHMENT|name|url]]
+        // marker IN PLACE, one level up, once it knows the final URL.
+        const attachments: RawAttachment[] = [];
+        const images: { name: string; dataUrl: string }[] = [];
+        let pastedIndex = 0;
+
         if (bodyEl && quoteCard) {
           const timestampEl = quoteCard.querySelector(args.quotedReplyTimestamp);
           const authorEl = timestampEl?.previousElementSibling ?? null;
@@ -258,8 +415,53 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
             if (text) replyParts.push(text);
           }
           content = `[[QUOTE|${quote.author}|${quote.timestamp}|${quote.text}]]\n${replyParts.join("\n\n")}`;
+        } else if (bodyEl) {
+          // One pass over each top-level child (Teams renders one per
+          // line) instead of a single whole-body innerText read, so a
+          // pasted image's own child element can be swapped for its
+          // placeholder right there in the loop — see the comment on
+          // attachments/images above for why this matters.
+          const parts: string[] = [];
+          for (const child of Array.from(bodyEl.children)) {
+            const inlineImages = Array.from(
+              child.querySelectorAll('[itemtype="http://schema.skype.com/AMSImage"] img')
+            ) as HTMLImageElement[];
+            const leftoverText = ((child as HTMLElement).innerText || child.textContent || "").trim();
+            if (!inlineImages.length) {
+              if (leftoverText) parts.push(leftoverText);
+              continue;
+            }
+            if (leftoverText) parts.push(leftoverText);
+            for (const imgEl of inlineImages) {
+              pastedIndex++;
+              const remoteUrl = imgEl.getAttribute("data-orig-src") || "";
+              const objectIdMatch = /\/objects\/([^/]+)\//.exec(remoteUrl);
+              const objectId = objectIdMatch?.[1] || imgEl.id.replace(/^x_/, "") || `unknown-${pastedIndex}`;
+              const name = `pasted-image-${objectId}`;
+              attachments.push({ name, url: remoteUrl });
+              parts.push(`[[PENDING_ATTACHMENT|${name}]]`);
+              if (imgEl.src.startsWith("blob:")) {
+                try {
+                  const res = await fetch(imgEl.src);
+                  const blob = await res.blob();
+                  const dataUrl: string = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = () => reject(reader.error);
+                    reader.readAsDataURL(blob);
+                  });
+                  images.push({ name, dataUrl });
+                } catch {
+                  // Same as the file-attachment case below — the
+                  // (unloadable without auth) remote reference still made
+                  // it into attachments[], just without bytes to embed.
+                }
+              }
+            }
+          }
+          content = parts.join("\n\n");
         } else {
-          content = bodyEl ? (bodyEl.innerText || bodyEl.textContent || "").trim() : "";
+          content = "";
         }
 
         // Mentions and attachments aren't part of the DB schema (see
@@ -309,9 +511,8 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
         // image's final URL needs DB access to check for/save a local
         // snapshot (see attachments.ts), which this DOM-only layer
         // deliberately doesn't have; that happens one level up, in
-        // watcher/index.ts.
-        const attachments: RawAttachment[] = [];
-        const images: { name: string; dataUrl: string }[] = [];
+        // watcher/index.ts. (attachments/images themselves are declared
+        // further up, alongside the content-building walk — see there.)
         const grid = node.querySelector(args.attachmentGrid);
         if (grid) {
           for (const item of Array.from(grid.querySelectorAll(args.attachmentItem))) {
@@ -380,11 +581,21 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
         // always maps to the same name regardless of what position it's
         // currently rendered in. attachments.ts appends the real extension
         // once it knows the actual content type from the captured bytes.
-        if (bodyEl) {
+        //
+        // Only reached for the QUOTE branch above — the plain-text branch
+        // already walked every top-level child itself and captured any
+        // inline image there, in position (see the content-building walk
+        // up top). A quoted reply's own inline image doesn't get that same
+        // positional treatment (it still ends up trailing the reply text,
+        // same as before this change) — lower priority than the plain-text
+        // case actually reported, and quote + inline-image is rare enough
+        // combined that it wasn't worth doubling the positional-walk logic
+        // for here too. It's still captured either way, just not
+        // positioned.
+        if (bodyEl && quoteCard) {
           const inlineImages = Array.from(
             bodyEl.querySelectorAll('[itemtype="http://schema.skype.com/AMSImage"] img')
           ) as HTMLImageElement[];
-          let pastedIndex = 0;
           for (const imgEl of inlineImages) {
             pastedIndex++;
             const remoteUrl = imgEl.getAttribute("data-orig-src") || "";

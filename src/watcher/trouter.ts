@@ -37,6 +37,26 @@ export interface PushedMessage {
   content: string;
   sender: string | null;
   timestamp: string;
+  /**
+   * True when the RAW resource.content (before htmlToText strips every
+   * tag) contains an `<img>` tag — confirmed live (teams.ts) that both a
+   * directly-pasted image and a real uploaded image render as an actual
+   * `<img>` in Teams' own DOM, and resource.content is that same
+   * underlying message HTML, so the tag survives into the push payload
+   * too. Lets handlePushedMessage (watcher/index.ts) recognize a message
+   * that mixes real text with an image — content is non-empty (so the
+   * existing empty-content pending check doesn't fire) but still
+   * push-incomplete, since push can never carry the actual image bytes.
+   * Without this, a text+image message just sat on the normal
+   * interval-based rotation instead of being prioritized, which on a busy
+   * account can leave it unresolved far longer than the "eventually"
+   * self-healing is supposed to mean (confirmed live: a "123"/image,
+   * "456"/image, "789"/image message in "48:notes" sent via three
+   * paragraphs stayed at its original push-only, image-less revision for
+   * 8+ minutes with zero DOM revisits, well past the 5min+jitter backup
+   * interval that should have caught it on the normal rotation).
+   */
+  hasInlineImage: boolean;
 }
 
 function parseTrouterFrame(text: string): PushedMessage | null {
@@ -82,8 +102,10 @@ function parseTrouterFrame(text: string): PushedMessage | null {
   const messageId = typeof r.id === "string" ? r.id : null;
   if (!conversationId || !messageId) return null;
 
-  const content = htmlToText(typeof r.content === "string" ? r.content : "");
+  const rawContent = typeof r.content === "string" ? r.content : "";
+  const content = htmlToText(rawContent);
   const sender = typeof r.imdisplayname === "string" ? r.imdisplayname : null;
+  const hasInlineImage = /<img\b/i.test(rawContent);
 
   // Confirmed live (two phantom rows in the "Daily Scrum" conversation,
   // message_ids 1787818820426 / 1787818877035): Teams also pushes
@@ -123,6 +145,7 @@ function parseTrouterFrame(text: string): PushedMessage | null {
     sender,
     timestamp:
       typeof r.originalarrivaltime === "string" ? r.originalarrivaltime : new Date().toISOString(),
+    hasInlineImage,
   };
 }
 

@@ -256,23 +256,57 @@ const MENTIONS_LINE_RE = /^\[\[MENTIONS\|(.+)\]\]$/;
 // are pipe-delimited.
 const QUOTE_LINE_RE = /^\[\[QUOTE\|([^|]*)\|([^|]*)\|(.*)\]\]$/;
 
+// `segments` (alongside the pre-existing `text`/`attachments`) is an
+// ORDERED list of { type: "text", value } | { type: "image", att } pieces,
+// rebuilt in the same order the lines appeared in `content` — which for an
+// image is now typically wherever teams.ts's attachments.ts resolved its
+// [[PENDING_ATTACHMENT|name]] placeholder to, i.e. the actual position the
+// image was pasted at, not always the very end. renderBody uses this to
+// show an inline image right where it was pasted (matching Teams' own
+// layout) instead of every image being bundled into a chip row after all
+// the text, which is what `attachments`+renderAttachments alone still
+// gives you — kept for the callers (the detail panel, `text`-only
+// contexts) that want the old "just the text, images separately" split.
 function extractTrailers(content) {
   const bodyLines = [];
   const attachments = [];
+  const segments = [];
+  let textBuffer = [];
   let mentionNames = [];
   let structuredQuote = null;
+  const flushTextBuffer = () => {
+    if (textBuffer.length) {
+      segments.push({ type: "text", value: textBuffer.join("\n") });
+      textBuffer = [];
+    }
+  };
   for (const line of (content ?? "").split("\n")) {
     const trimmed = line.trim();
     const attMatch = ATTACHMENT_LINE_RE.exec(trimmed);
     const mentionMatch = MENTIONS_LINE_RE.exec(trimmed);
     const quoteMatch = QUOTE_LINE_RE.exec(trimmed);
-    if (attMatch) attachments.push({ name: attMatch[1], url: attMatch[2] });
-    else if (mentionMatch) mentionNames = mentionMatch[1].split("|").filter(Boolean);
+    if (attMatch) {
+      const att = { name: attMatch[1], url: attMatch[2] };
+      attachments.push(att);
+      // Only an IMAGE gets its own segment, positioned here — a non-image
+      // file attachment has no meaningful position of its own (Teams
+      // renders those as a grid regardless of surrounding text), so it's
+      // left out of `segments` entirely and stays purely in `attachments`
+      // for callers to render as a trailing chip row, same as before.
+      if (IMAGE_EXT_RE.test(att.name) && att.url) {
+        flushTextBuffer();
+        segments.push({ type: "image", att });
+      }
+    } else if (mentionMatch) mentionNames = mentionMatch[1].split("|").filter(Boolean);
     else if (quoteMatch) {
       structuredQuote = { quotedAuthor: quoteMatch[1], quotedTimestamp: quoteMatch[2], quotedText: quoteMatch[3] };
-    } else bodyLines.push(line);
+    } else {
+      bodyLines.push(line);
+      textBuffer.push(line);
+    }
   }
-  return { text: bodyLines.join("\n").trim(), attachments, mentionNames, structuredQuote };
+  flushTextBuffer();
+  return { text: bodyLines.join("\n").trim(), attachments, segments, mentionNames, structuredQuote };
 }
 
 // Renders each mentioned name (already known exactly, extracted from a
@@ -297,37 +331,47 @@ function highlightMentions(escapedText, mentionNames) {
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
-// asLinks=false (the message LIST) renders every chip as an inert <div> —
-// no <a>, no target=_blank — so a click anywhere on the message, image
-// included, does exactly one thing: select it and open the detail panel.
-// That used to be two competing actions on one click (open the history
-// popup AND open the image in a new tab), which was the actual complaint.
+// asLinks=false (the message LIST, including a segment rendered inline by
+// renderBody) renders the chip as an inert <div> — no <a>, no
+// target=_blank — so a click anywhere on the message, image included,
+// does exactly one thing: select it and open the detail panel. That used
+// to be two competing actions on one click (open the history popup AND
+// open the image in a new tab), which was the actual complaint.
 // asLinks=true is used only for non-image files inside the now-open
 // detail panel, where a click is an explicit, unambiguous "open this
 // file" action with nothing else listening on the same click.
+//
+// Split out of renderAttachments below so renderBody can also call it
+// per-segment, at an image's own position in the text, rather than only
+// ever through renderAttachments' all-images-in-one-row rendering.
+function renderImageChip(a, asLinks) {
+  const name = escapeHtml(a.name);
+  const url = escapeHtml(a.url);
+  const icon = `<span class="attachment-icon">📎</span><span class="attachment-name">${name}</span>`;
+  const tag = asLinks && a.url ? "a" : "div";
+  const linkAttrs = tag === "a" ? ` href="${url}" target="_blank" rel="noopener"` : "";
+  // Normally a.url is our own /api/attachments/... route serving a
+  // locally-downloaded copy of the image's actual bytes (see
+  // watcher/attachments.ts) — no auth needed, always loads. The onerror
+  // fallback exists for the rarer case where no local snapshot exists
+  // (e.g. the in-page blob read failed) and a.url is a remote Teams link
+  // needing an authenticated session this dashboard's viewer may not
+  // have — falls back to a plain link chip rather than a broken-image icon.
+  return `<${tag}${linkAttrs} class="attachment-chip attachment-image">
+    <img src="${url}" alt="${name}" onerror="this.parentElement.classList.add('broken'); this.remove()" />
+    ${icon}
+  </${tag}>`;
+}
+
 function renderAttachments(attachments, asLinks) {
   if (!attachments.length) return "";
   const chips = attachments.map((a) => {
+    if (IMAGE_EXT_RE.test(a.name) && a.url) return renderImageChip(a, asLinks);
     const name = escapeHtml(a.name);
     const url = escapeHtml(a.url);
     const icon = `<span class="attachment-icon">📎</span><span class="attachment-name">${name}</span>`;
-    const isImage = IMAGE_EXT_RE.test(a.name) && a.url;
     const tag = asLinks && a.url ? "a" : "div";
     const linkAttrs = tag === "a" ? ` href="${url}" target="_blank" rel="noopener"` : "";
-    if (isImage) {
-      // Normally a.url is our own /api/attachments/... route serving a
-      // locally-downloaded copy of the image's actual bytes (see
-      // watcher/attachments.ts) — no auth needed, always loads. The
-      // onerror fallback exists for the rarer case where no local
-      // snapshot exists (e.g. the in-page blob read failed) and a.url is
-      // a remote Teams link needing an authenticated session this
-      // dashboard's viewer may not have — falls back to a plain link chip
-      // rather than a broken-image icon.
-      return `<${tag}${linkAttrs} class="attachment-chip attachment-image">
-        <img src="${url}" alt="${name}" onerror="this.parentElement.classList.add('broken'); this.remove()" />
-        ${icon}
-      </${tag}>`;
-    }
     return `<${tag}${linkAttrs} class="attachment-chip">${icon}</${tag}>`;
   });
   return `<div class="attachment-list">${chips.join("")}</div>`;
@@ -366,7 +410,11 @@ function renderImagesLoadingNote() {
 // images (a dedicated gallery) and non-image files (their own section)
 // itself rather than inline with the text — see showMessageDetail.
 function renderBody(content, isDeleted, { includeAttachments = true, pending = false } = {}) {
-  const { text, attachments, mentionNames, structuredQuote } = extractTrailers(content);
+  const { text, attachments, segments, mentionNames, structuredQuote } = extractTrailers(content);
+  // Quote branch below doesn't get the inline-at-position treatment (see
+  // teams.ts/attachments.ts — a quoted reply's own pasted image isn't
+  // given a placeholder there), so it still wants every attachment
+  // trailing, same as before.
   const attachmentsHtml = includeAttachments ? renderAttachments(attachments, false) : "";
 
   // structuredQuote comes from teams.ts's DOM extraction, pulled directly
@@ -381,8 +429,29 @@ function renderBody(content, isDeleted, { includeAttachments = true, pending = f
 
   if (!quoted) {
     if (!text && !attachments.length && !isDeleted) return renderPendingPlaceholder();
-    const bodyHtml = text ? `<div class="message-body">${highlightMentions(escapeHtml(text), mentionNames)}</div>` : "";
-    return bodyHtml + attachmentsHtml + (pending ? renderImagesLoadingNote() : "");
+    if (!includeAttachments) {
+      // The detail panel: plain text only — it renders its own dedicated
+      // image gallery and file section separately (see showMessageDetail),
+      // so an image here would just show twice.
+      const bodyHtml = text ? `<div class="message-body">${highlightMentions(escapeHtml(text), mentionNames)}</div>` : "";
+      return bodyHtml + (pending ? renderImagesLoadingNote() : "");
+    }
+    // Inline images render AT THEIR ORIGINAL POSITION in the text —
+    // `segments` (see extractTrailers) already carries them in the right
+    // order, since teams.ts/attachments.ts resolve a pasted image's
+    // placeholder in place rather than always trailing the text. A
+    // non-image file attachment has no position of its own (Teams itself
+    // renders those as a grid regardless of surrounding text), so those
+    // still render as a trailing chip row, same as before this existed.
+    const bodyHtml = segments.length
+      ? `<div class="message-body">${segments
+          .map((seg) =>
+            seg.type === "image" ? renderImageChip(seg.att, false) : highlightMentions(escapeHtml(seg.value), mentionNames)
+          )
+          .join("")}</div>`
+      : "";
+    const fileAttachments = attachments.filter((a) => !(IMAGE_EXT_RE.test(a.name) && a.url));
+    return bodyHtml + renderAttachments(fileAttachments, false) + (pending ? renderImagesLoadingNote() : "");
   }
   return `
     <div class="quote-block">

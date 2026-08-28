@@ -247,6 +247,13 @@ body {
 a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
 .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-image { flex-direction: column; align-items: stretch; max-width: 220px; padding: 6px; }
+/* An image rendered inline within .message-body's pre-wrap text (see
+   renderBody's segment-based rendering, app.js) sits between blank lines
+   from the surrounding [[PENDING_ATTACHMENT]]->[[ATTACHMENT]] placeholder
+   spacing already, but needs its own vertical breathing room too — a bare
+   inline-flex chip crammed directly against the text line above/below it
+   otherwise. */
+.message-body .attachment-image { margin: 4px 0; }
 .attachment-image img { max-width: 100%; max-height: 200px; border-radius: 4px; object-fit: contain; display: block; margin-bottom: 4px; }
 /* The thumbnail already shows this is a file, so the icon+name row stays
    hidden while the image loads fine — shown only as the fallback once
