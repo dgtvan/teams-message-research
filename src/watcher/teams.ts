@@ -184,6 +184,7 @@ function ensureChatTokenCapture(page: Page): void {
     if (req.method() !== "POST" || !req.url().includes("/api/chatsvc/")) return;
     const auth = req.headers()["authorization"];
     const token = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
+    console.log(`[send] observed chatsvc POST ${req.url()} (auth header ${token ? "present" : "MISSING"})`);
     if (!token) return;
     const expiresAtMs = decodeJwtExpiryMs(token) ?? Date.now() + 5 * 60_000;
     cachedToken = { secret: token, expiresAtMs };
@@ -336,8 +337,10 @@ export async function sendMessage(page: Page, conversationId: string, text: stri
 export async function warmChatServiceToken(page: Page): Promise<void> {
   ensureChatTokenCapture(page);
   if (getCachedChatServiceToken()) return;
+  const t0 = Date.now();
   try {
     await openConversation(page, "48:notes");
+    console.log(`[send] warm-up: conversation opened after ${Date.now() - t0}ms`);
     const editor = page.locator(selectors.composeBox);
     await editor.click();
     // A real character, not whitespace — confirmed live that a lone space
@@ -355,9 +358,14 @@ export async function warmChatServiceToken(page: Page): Promise<void> {
     while (!getCachedChatServiceToken() && Date.now() < deadline) {
       await page.waitForTimeout(200);
     }
+    console.log(
+      getCachedChatServiceToken()
+        ? `[send] warm-up: token captured after ${Date.now() - t0}ms total`
+        : `[send] warm-up: no token captured after ${Date.now() - t0}ms total (typing indicator never fired?)`
+    );
     await editor.fill("");
-  } catch {
-    // Best-effort — see doc comment above.
+  } catch (err) {
+    console.log(`[send] warm-up: threw after ${Date.now() - t0}ms: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
