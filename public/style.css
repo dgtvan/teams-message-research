@@ -378,11 +378,21 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
   background: #141414;
   border-radius: 8px;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
 }
 .detail-viewer img {
+  /* Centering via margin:auto rather than justify-content/align-items on
+     the container above — the latter looks identical while the image
+     fits, but once it overflows (zoomed in), a centered flex/grid item's
+     start-side overflow (left/top) becomes unreachable by scrolling even
+     at scrollLeft/scrollTop 0, since the browser still centers the
+     overflow symmetrically instead of anchoring it to the scrollable
+     origin. Confirmed live: zooming in cut off the left side of the image
+     with nowhere to scroll to reach it. margin:auto has the same visual
+     centering effect when the content fits, but collapses to 0 and
+     leaves the item fully, normally scrollable the moment it overflows —
+     the standard fix for this exact "centered scrollable content" case. */
+  margin: auto;
   max-width: 100%;
   max-height: 50vh;
   object-fit: contain;
