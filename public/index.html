@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Teams Watcher</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="authBanner" class="auth-banner" hidden>
+    Teams needs you to log in again — check the Edge window (it should have popped up).
+  </div>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>Tracked</h1>
+        <div id="connStatus" class="conn-status" title="Backend connection">
+          <span id="connDot" class="conn-dot connecting"></span>
+          <span id="connText" class="conn-label">Connecting…</span>
+        </div>
+      </div>
+      <div id="tabList" class="tab-list"></div>
+    </aside>
+
+    <main class="content">
+      <div id="emptyState" class="empty-state">
+        Select a tracked conversation. Every conversation is tracked automatically.
+      </div>
+      <div id="conversationView" class="conversation-view" hidden>
+        <h2 id="conversationTitle"></h2>
+        <div id="messageList" class="message-list"></div>
+        <div class="compose-bar">
+          <textarea id="composeInput" class="compose-input" placeholder="Type a message… (Enter to send, Shift+Enter for a new line)" rows="1"></textarea>
+          <button id="composeSend" class="compose-send">Send</button>
+        </div>
+        <div id="composeError" class="compose-error" hidden></div>
+      </div>
+    </main>
+
+    <div id="resizer" class="resizer" hidden></div>
+    <aside id="detailPanel" class="detail-panel" hidden>
+      <div class="detail-header">
+        <span class="detail-title">Message detail</span>
+        <span id="detailClose" class="detail-close" title="Close">&times;</span>
+      </div>
+      <div id="detailBody" class="detail-body"></div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "teams-message-research",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local browser-automation watcher for Microsoft Teams conversations, with edit/delete history and a multi-tab dashboard.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "clone-debug-data": "node scripts/clone-debug-data.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.47.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.5.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

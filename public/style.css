@@ -1,0 +1,450 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #1e1e1e;
+  color: #e6e6e6;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.auth-banner {
+  background: #b35900;
+  color: white;
+  padding: 8px 16px;
+  font-size: 13px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.layout { display: flex; flex: 1; min-height: 0; }
+
+.sidebar {
+  width: 260px;
+  background: #252526;
+  border-right: 1px solid #3a3a3a;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #3a3a3a;
+}
+.sidebar-header h1 { font-size: 14px; margin: 0; text-transform: uppercase; letter-spacing: 0.05em; color: #999; }
+.conn-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #999; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: #666; flex-shrink: 0; }
+.conn-dot.connected { background: #3fb950; box-shadow: 0 0 4px rgba(63, 185, 80, 0.6); }
+.conn-dot.disconnected { background: #d16969; }
+.conn-dot.connecting { background: #dcb67a; animation: conn-pulse 1s ease-in-out infinite; }
+@keyframes conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.tab-list { overflow-y: auto; flex: 1; }
+.tab {
+  padding: 10px 12px;
+  border-bottom: 1px solid #2d2d2d;
+  cursor: pointer;
+}
+.tab:hover { background: #2a2d2e; }
+.tab.active { background: #37373d; border-left: 3px solid #0078d4; }
+.tab-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tab-title { font-weight: 600; font-size: 13px; }
+.tab-kind { font-size: 11px; color: #999; }
+.tab.unread .tab-title { color: #fff; font-weight: 700; }
+.unread-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #0078d4;
+  margin-right: 6px;
+}
+.sync-spinner {
+  display: none;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border: 2px solid #3a3a3a;
+  border-top-color: #0078d4;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: sync-spin 0.6s linear infinite;
+}
+.tab.syncing .sync-spinner { display: inline-block; }
+@keyframes sync-spin { to { transform: rotate(360deg); } }
+.pin-btn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.pin-btn:hover { color: #ccc; }
+.pin-btn.pinned { color: #dcb67a; }
+
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.empty-state { margin: auto; color: #777; }
+.conversation-view { display: flex; flex-direction: column; height: 100%; }
+.conversation-view h2 { padding: 14px 20px; margin: 0; border-bottom: 1px solid #3a3a3a; font-size: 16px; }
+
+/* Cards with a gap, not a flat scroll of text separated by hairlines —
+   each message reads as its own unit, at a glance, before you even parse
+   the words. That structural separation is what "lines after lines" was
+   missing; everything below (color, spacing, the quote treatment) builds
+   on top of that base unit. */
+.message-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.message {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.message:hover { background: #262626; border-color: #333; }
+.message.selected { background: #26272b; border-color: #0078d4; }
+.message-meta { font-size: 12px; display: flex; align-items: baseline; gap: 8px; }
+/* Sender color comes from colorForSender() in app.js — a deterministic
+   hash per name, not random — so the same person reads as the same color
+   everywhere (message list, quote previews, revision history), which is
+   what actually makes a multi-person log scannable: you learn to spot
+   "that's Hau" by color before you've read the name. */
+.message-sender { font-weight: 600; font-size: 13px; }
+.message-time { font-size: 11px; color: #666; }
+.message-body { margin-top: 5px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; }
+.message.deleted .message-body { color: #d16969; font-style: italic; }
+.edited-tag { color: #dcb67a; font-size: 11px; }
+
+/* Real-time push delivers a message instantly but can't extract
+   attachments — that only happens on the next DOM-based visit, up to a
+   few minutes later (see renderBody's comment in app.js). Without this, a
+   message with an image just looked blank/broken for that whole window;
+   this fills the gap so it reads as "still loading", not "did this
+   break". Disappears on its own — the next live-update WebSocket message
+   re-renders with the resolved content once the visit loop catches up. */
+.message-pending {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-style: italic;
+  color: #888;
+}
+.pending-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #3a3a3a;
+  border-top-color: #666;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: sync-spin 0.8s linear infinite;
+}
+
+/* A quoted/replied-to message (see splitQuotedReply/renderBody in app.js),
+   styled as a compact reply-preview card — the same visual language Teams/
+   Slack/Discord use for "replying to X" — rather than a plain left-border
+   box: a tinted background sets it apart from the real message body as its
+   own distinct region, a reply glyph marks it as a quote at a glance, and
+   the 3-line clamp keeps a long quoted message from dominating the reply
+   it's attached to (click into revision history for the full text). */
+.quote-block {
+  margin: 0 0 8px;
+  padding: 6px 10px 7px 12px;
+  border-left: 3px solid #0078d4;
+  background: rgba(0, 120, 212, 0.08);
+  border-radius: 0 6px 6px 0;
+}
+.quote-author { font-size: 11px; font-weight: 600; display: flex; align-items: baseline; gap: 5px; }
+.quote-icon { color: #0078d4; font-size: 12px; }
+.quote-timestamp { font-weight: 400; color: #666; }
+.quote-text {
+  margin-top: 3px;
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* @mention pill — color matches colorForSender() so the same person reads
+   as the same color whether they're the message author, a quoted author,
+   or just mentioned in passing. */
+.mention-pill {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* Attachments render as a row of chips below the message text — a file
+   icon + name for anything, and additionally an inline thumbnail for an
+   image extension IF the viewer's own browser session can actually load
+   it (see the onerror fallback in renderAttachments, app.js: the URL is a
+   SharePoint link scoped to the sender's Microsoft 365 account, not
+   something this dashboard can authenticate on its own). */
+.attachment-list { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #ccc;
+  text-decoration: none;
+  max-width: 260px;
+}
+a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-image { flex-direction: column; align-items: stretch; max-width: 220px; padding: 6px; }
+.attachment-image img { max-width: 100%; max-height: 200px; border-radius: 4px; object-fit: contain; display: block; margin-bottom: 4px; }
+/* The thumbnail already shows this is a file, so the icon+name row stays
+   hidden while the image loads fine — shown only as the fallback once
+   onerror marks the chip .broken (image removed), so something still
+   identifies the attachment either way. */
+.attachment-image .attachment-icon, .attachment-image .attachment-name { display: none; }
+.attachment-image.broken { flex-direction: row; align-items: center; padding: 4px 8px; }
+.attachment-image.broken .attachment-icon, .attachment-image.broken .attachment-name { display: inline; }
+
+.compose-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 20px;
+  border-top: 1px solid #3a3a3a;
+  flex-shrink: 0;
+}
+.compose-input {
+  flex: 1;
+  resize: none;
+  max-height: 140px;
+  padding: 8px 12px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  color: #e6e6e6;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.compose-input:focus { outline: none; border-color: #0078d4; }
+.compose-input:disabled { opacity: 0.6; }
+.compose-send {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  background: #0078d4;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.compose-send:hover:not(:disabled) { background: #106ebe; }
+.compose-send:disabled { opacity: 0.5; cursor: default; }
+.compose-error {
+  padding: 0 20px 10px;
+  color: #d16969;
+  font-size: 12px;
+}
+.compose-error[hidden] { display: none; }
+
+/* Draggable divider between the message list and the detail panel — see
+   the resizer drag logic in app.js. A plain 5px hit-target is a bit thin
+   for a mouse but matches the thin dividers used elsewhere (sidebar
+   border etc.); the hover/dragging color change is what actually signals
+   "this is grabbable", not width. */
+.resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: #2d2d2d;
+}
+.resizer:hover, .resizer.dragging { background: #0078d4; }
+
+/* Replaces the old revision-history modal entirely — clicking a message
+   (anywhere on it, text or image) now opens this panel instead of a
+   popup, and an image no longer ALSO opens a new tab on the same click;
+   those were two competing actions on one click, which is what made the
+   old experience bad. */
+.detail-panel {
+  width: 400px;
+  min-width: 260px;
+  max-width: 70vw;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #202020;
+  border-left: 1px solid #3a3a3a;
+  overflow: hidden;
+}
+.detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0;
+}
+.detail-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #999; }
+.detail-close { cursor: pointer; color: #999; font-size: 18px; line-height: 1; }
+.detail-close:hover { color: #fff; }
+.detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.detail-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+
+/* Section 1 of the image area (small, fixed): a horizontal filmstrip of
+   every image in the message. Section 2 (big, the rest of the available
+   room): whichever thumbnail is selected, shown large and zoomable. */
+.detail-images { display: flex; flex-direction: column; gap: 8px; }
+.detail-thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+.detail-thumb {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid #3a3a3a;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.detail-thumb:hover { opacity: 1; border-color: #555; }
+.detail-thumb.selected { border-color: #0078d4; opacity: 1; }
+.detail-viewer {
+  min-height: 200px;
+  max-height: 50vh;
+  background: #141414;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+.detail-viewer img {
+  max-width: 100%;
+  max-height: 50vh;
+  object-fit: contain;
+  cursor: zoom-in;
+  /* Images are natively draggable by default, which fights the click-to-
+     zoom handler above (a click that turns into a native drag never
+     reaches it) — turn that off. */
+  -webkit-user-drag: none;
+}
+/* Click-to-zoom: swaps to the image's real size inside a scrollable
+   viewport rather than a fixed max, which is what makes it actually
+   zoomable (you can scroll around it) instead of just "a bigger fit". */
+.detail-viewer img.zoomed {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.detail-files { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Accordion behavior, modeled directly on VS Code's sidebar sections
+   (Source Control's REPOSITORIES/CHANGES/GRAPH): collapsed means just the
+   header, and since .detail-body is a flex column, an auto top-margin on
+   a collapsed section pushes that header all the way down to the bottom
+   of the panel rather than leaving it sitting right under whatever
+   section came before it with dead space beneath — margin-top:auto stays
+   on regardless of expanded state, so a manually shrunk section (see
+   .custom-height below) stays docked to the bottom too, opening up space
+   ABOVE it rather than leaving a gap below. Freshly expanded (no manual
+   height yet) means the section claims ALL remaining vertical space down
+   to the bottom of the panel (flex: 1) as a default, not a hard rule —
+   dragging .detail-history-resizer overrides that to an explicit height
+   (adds .custom-height, see app.js). min-height: 0 is required on both
+   the section and the list below so a flex child is allowed to actually
+   shrink/scroll internally instead of forcing the whole panel to
+   overflow. */
+.detail-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: auto;
+}
+.detail-history.expanded {
+  flex: 1 1 auto;
+}
+.detail-history.expanded.custom-height {
+  flex: 0 0 auto;
+}
+.detail-history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #999;
+  cursor: pointer;
+  text-align: left;
+}
+.detail-history-toggle:hover { color: #ccc; }
+.detail-history-chevron { display: inline-block; transition: transform 0.12s ease; font-size: 9px; }
+.detail-history-toggle.expanded .detail-history-chevron { transform: rotate(90deg); }
+
+/* Real, always-visible element (same treatment as .resizer, the
+   panel-width divider above) — not position:absolute floating invisibly
+   over neighboring content, which was tried here before and was both
+   unfindable and easy to miss onto the image gallery above it. Only
+   rendered while expanded (see app.js) — nothing to resize while
+   collapsed. */
+.detail-history-resizer {
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  margin-bottom: 8px;
+  cursor: row-resize;
+  background: #2d2d2d;
+}
+.detail-history-resizer:hover,
+.detail-history-resizer.dragging {
+  background: #0078d4;
+}
+
+.revision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow-y: auto;
+}
+.revision-list[hidden] { display: none; }
+.revision-item { padding: 10px 12px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; }
+.revision-meta { font-size: 11px; color: #999; margin-bottom: 3px; }
