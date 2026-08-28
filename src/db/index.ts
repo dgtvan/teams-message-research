@@ -278,6 +278,12 @@ export function getRevisionsForMessage(messageId: string): MessageRevision[] {
     .all(messageId) as unknown as MessageRevision[];
 }
 
+export function getLatestRevision(messageId: string): MessageRevision | undefined {
+  return db
+    .prepare(`SELECT * FROM message_revisions WHERE message_id = ? ORDER BY revision_id DESC LIMIT 1`)
+    .get(messageId) as unknown as MessageRevision | undefined;
+}
+
 export function getLatestRevisionsForConversation(conversationId: string) {
   return db
     .prepare(

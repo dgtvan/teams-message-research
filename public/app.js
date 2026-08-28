@@ -8,6 +8,13 @@ let selectedMessageId = null;
 // there's no DB column for it), so it's plain in-memory state here, rebuilt
 // into each tab's class list on every loadTabs() re-render.
 const syncingIds = new Set();
+// Same idea, at message granularity: message ids the backend has flagged as
+// "the latest revision we recorded might be incomplete" (see
+// pendingResolutionMessagesByConversation in watcher/index.ts) — most
+// commonly an edit that dropped attachments because push can't carry them,
+// waiting on the backup DOM visit to reconcile. Drives renderImagesLoadingNote
+// in renderBody below.
+const pendingMessageIds = new Set();
 
 const tabList = document.getElementById("tabList");
 const emptyState = document.getElementById("emptyState");
@@ -115,7 +122,7 @@ async function loadMessages(id) {
         <span class="message-time">${new Date(m.captured_at).toLocaleString()}</span>
         ${m.edited_flag ? '<span class="edited-tag">(edited)</span>' : ""}
       </div>
-      ${renderBody(m.content, !!m.is_deleted)}
+      ${renderBody(m.content, !!m.is_deleted, { pending: pendingMessageIds.has(m.message_id) })}
     `;
     // Anywhere on the message — text or an image inside it — opens the
     // detail panel. Images render with no <a> wrapper of their own now
@@ -343,10 +350,22 @@ function renderPendingPlaceholder() {
   return `<div class="message-pending"><span class="pending-spinner"></span>Fetching message content…</div>`;
 }
 
+// The narrower sibling of renderPendingPlaceholder above: this message
+// already has SOME real content (text, at least) but the backend has
+// explicitly flagged it as pending (see pendingMessageIds) — most often an
+// edit that dropped attachments because push can't carry them. Reuses the
+// same .message-pending/.pending-spinner styling for visual consistency,
+// just with different wording and shown ALONGSIDE the real content instead
+// of replacing it, since — unlike the fully-empty case above — there's
+// already something real to show.
+function renderImagesLoadingNote() {
+  return `<div class="message-pending"><span class="pending-spinner"></span>Loading images…</div>`;
+}
+
 // includeAttachments=false is used by the detail panel, which renders
 // images (a dedicated gallery) and non-image files (their own section)
 // itself rather than inline with the text — see showMessageDetail.
-function renderBody(content, isDeleted, { includeAttachments = true } = {}) {
+function renderBody(content, isDeleted, { includeAttachments = true, pending = false } = {}) {
   const { text, attachments, mentionNames, structuredQuote } = extractTrailers(content);
   const attachmentsHtml = includeAttachments ? renderAttachments(attachments, false) : "";
 
@@ -363,7 +382,7 @@ function renderBody(content, isDeleted, { includeAttachments = true } = {}) {
   if (!quoted) {
     if (!text && !attachments.length && !isDeleted) return renderPendingPlaceholder();
     const bodyHtml = text ? `<div class="message-body">${highlightMentions(escapeHtml(text), mentionNames)}</div>` : "";
-    return bodyHtml + attachmentsHtml;
+    return bodyHtml + attachmentsHtml + (pending ? renderImagesLoadingNote() : "");
   }
   return `
     <div class="quote-block">
@@ -376,6 +395,7 @@ function renderBody(content, isDeleted, { includeAttachments = true } = {}) {
     </div>
     ${replyText ? `<div class="message-body">${highlightMentions(escapeHtml(replyText), mentionNames)}</div>` : ""}
     ${attachmentsHtml}
+    ${pending ? renderImagesLoadingNote() : ""}
   `;
 }
 
@@ -477,7 +497,7 @@ async function showMessageDetail(messageId) {
       <span class="message-time">${new Date(latest.captured_at).toLocaleString()}</span>
       ${latest.edited_flag ? '<span class="edited-tag">(edited)</span>' : ""}
     </div>
-    ${renderBody(latest.content, !!latest.is_deleted, { includeAttachments: false })}
+    ${renderBody(latest.content, !!latest.is_deleted, { includeAttachments: false, pending: pendingMessageIds.has(messageId) })}
     ${renderImageGallerySection(images)}
     ${files.length ? renderAttachments(files, true) : ""}
     <div class="detail-history${historyExpanded ? " expanded" : ""}${historyExpanded && historyHeightPx ? " custom-height" : ""}">
@@ -722,6 +742,18 @@ function connectWebSocket() {
       else syncingIds.delete(msg.conversationId);
       const el = tabList.querySelector(`[data-conversation-id="${msg.conversationId}"]`);
       if (el) el.classList.toggle("syncing", msg.syncing);
+    } else if (msg.type === "messagePending") {
+      if (msg.pending) pendingMessageIds.add(msg.messageId);
+      else pendingMessageIds.delete(msg.messageId);
+      // A full reload rather than patching the one row in place — same
+      // approach loadMessages already takes for a genuine "update", and
+      // this fires rarely enough (message edits/new-attachment messages,
+      // not every push) that the simplicity is worth more than avoiding a
+      // cheap local re-fetch. Only when the message is actually showing
+      // right now, same as the "update" branch above.
+      if (currentMessages.some((m) => m.message_id === msg.messageId)) {
+        loadMessages(activeConversationId);
+      }
     }
   };
   ws.onclose = () => {

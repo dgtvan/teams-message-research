@@ -13,6 +13,7 @@ import { startServer } from "./server/index.js";
 type NotifyUpdate = (conversationId: string) => void;
 type NotifyAuth = (status: "required" | "resolved") => void;
 type NotifySync = (conversationId: string, syncing: boolean) => void;
+type NotifyMessagePending = (messageId: string, pending: boolean) => void;
 type SetSendHandler = (handler: ((conversationId: string, text: string) => Promise<void>) | null) => void;
 
 // Tracked so a shutdown signal can close whichever browser context is
@@ -44,6 +45,7 @@ async function runHeadlessSession(
   notifyUpdate: NotifyUpdate,
   notifyAuth: NotifyAuth,
   notifySync: NotifySync,
+  notifyMessagePending: NotifyMessagePending,
   setSendHandler: SetSendHandler
 ): Promise<void> {
   const context = await launchTeamsBrowser(true);
@@ -60,7 +62,7 @@ async function runHeadlessSession(
   setSendHandler((conversationId, text) => sendMessageTo(page, conversationId, text));
   await new Promise<void>((resolve) => {
     let stopDiscovery = () => {};
-    const stopVisits = startVisitLoop(page, notifyUpdate, notifySync);
+    const stopVisits = startVisitLoop(page, notifyUpdate, notifySync, notifyMessagePending);
 
     const stopWatching = watchForReauth(page, () => {
       console.log("[watcher] Teams needs you to log in again — switching to a visible browser.");
@@ -72,8 +74,8 @@ async function runHeadlessSession(
       context.close().finally(resolve);
     });
 
-    startPushListener(page, notifyUpdate);
-    catchUpAllTracked(page, notifyUpdate, notifySync)
+    startPushListener(page, notifyUpdate, notifyMessagePending);
+    catchUpAllTracked(page, notifyUpdate, notifySync, notifyMessagePending)
       .then(() => startDiscoveryLoop(page))
       .then((stop) => {
         stopDiscovery = stop;
@@ -102,6 +104,7 @@ async function main() {
       server.notifyConversationUpdate,
       server.notifyAuth,
       server.notifySyncStatus,
+      server.notifyMessagePending,
       server.setSendHandler
     );
     await runHeadedLoginSession(server.notifyAuth);

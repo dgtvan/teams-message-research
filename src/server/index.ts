@@ -55,6 +55,17 @@ export function startServer() {
   const notifySyncStatus = (conversationId: string, syncing: boolean) =>
     broadcastRaw({ type: "sync", conversationId, syncing });
 
+  // Per-message equivalent of notifySyncStatus, for a message whose latest
+  // content is known-incomplete (e.g. an edit that dropped attachments
+  // push can't carry — see pendingResolutionMessagesByConversation in
+  // watcher/index.ts) rather than "which conversation is the shared tab
+  // on right now". No REST snapshot endpoint for this, same as sync
+  // status above — purely event-driven, so a dashboard that loads mid-
+  // pending won't show the spinner until the next state change, which
+  // matches how the conversation-level sync indicator already works.
+  const notifyMessagePending = (messageId: string, pending: boolean) =>
+    broadcastRaw({ type: "messagePending", messageId, pending });
+
   // The watcher's browser page is created/torn down across re-logins (see
   // index.ts's runHeadlessSession/runHeadedLoginSession loop), independent
   // of this server, which starts once and stays up — so rather than the
@@ -133,5 +144,5 @@ export function startServer() {
     if (config.server.autoOpenBrowser) openInBrowser(url);
   });
 
-  return { notifyConversationUpdate, notifyAuth, notifySyncStatus, setSendHandler };
+  return { notifyConversationUpdate, notifyAuth, notifySyncStatus, notifyMessagePending, setSendHandler };
 }

@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { config } from "../config.js";
 import {
   advanceWatermark,
+  getLatestRevision,
   getMessageOwner,
   getTrackedConversation,
   listTrackedConversations,
@@ -27,6 +28,8 @@ import { selectors } from "./selectors.js";
 export type ChangeListener = (conversationId: string) => void;
 /** Fired around every DOM visit (open + extract) so the dashboard can show which conversation the shared tab is on right now. */
 export type SyncListener = (conversationId: string, syncing: boolean) => void;
+/** Fired when a specific message enters/leaves pendingResolutionMessagesByConversation, so the dashboard can show a per-message "still loading" indicator (e.g. images not resolved yet) instead of just silently displaying whatever incomplete content push gave us. */
+export type MessagePendingListener = (messageId: string, pending: boolean) => void;
 
 /**
  * Single-tab design: exactly one browser tab handles login, discovery,
@@ -78,25 +81,50 @@ function toBigIntOrNull(id: string | null | undefined): bigint | null {
   }
 }
 
-// Conversations with at least one message that arrived via push with
-// empty content and a real sender — push can't extract attachments at
-// all (see handlePushedMessage below and renderPendingPlaceholder in
-// app.js), so that's the signature of a probably-unresolved image/file,
-// not a genuine no-op push (a real reaction has an empty SENDER too, and
-// never reaches recordObservedMessage — see trouter.ts). The backup visit
-// loop checks this set first, ahead of its normal interval-based
-// rotation, since a REST/HTTP alternative to DOM extraction isn't viable
-// here — both the chatsvc endpoint and the image's own `amspreviewurl`
-// 401 without an authenticated Teams session neither page.request nor an
-// in-page fetch can supply (confirmed live, see README). DOM extraction
-// via the browser is the only thing that's actually worked; this doesn't
-// replace it, it just stops a busy conversation's frequent push traffic
-// from endlessly deferring the backup visit that would resolve it —
-// touchSynced runs on every push (new message or not), so an active
-// conversation's normal due-interval can keep getting pushed back
-// indefinitely, which is exactly the scenario most likely to have
-// pending images in the first place.
+// Conversations with at least one message that arrived via push in a
+// state push can't fully represent on its own — push can't extract
+// attachments at all (see handlePushedMessage below and
+// renderPendingPlaceholder in app.js), so two shapes both count as
+// "probably incomplete, needs a DOM pass to reconcile":
+//   1. A genuinely NEW message with empty content and a real sender —
+//      the signature of an attachment-only message (a real reaction has
+//      an empty SENDER too, and never reaches recordObservedMessage —
+//      see trouter.ts, so this can't misfire on those).
+//   2. An EDIT (or any push) to a message whose previous revision had
+//      attachment markers — push's own content for the edit is always
+//      attachment-blind, so if we just recorded push's version straight
+//      over a revision that had real attachments, whatever push gave us
+//      may have silently dropped them. Confirmed live: editing a
+//      3-image message (removing one, adding text) pushed a plain-text
+//      revision with zero attachment markers — not just the one removed,
+//      all of them — and it stayed that way, because this same
+//      conversation's OWN follow-up push traffic kept resetting
+//      touchSynced (see below) and deferring the backup visit that would
+//      have caught and fixed it, for far longer than "eventually".
+// The backup visit loop checks this set first, ahead of its normal
+// interval-based rotation, since a REST/HTTP alternative to DOM
+// extraction isn't viable here — both the chatsvc endpoint and the
+// image's own `amspreviewurl` 401 without an authenticated Teams session
+// neither page.request nor an in-page fetch can supply (confirmed live,
+// see README). DOM extraction via the browser is the only thing that's
+// actually worked; this doesn't replace it, it just stops a busy
+// conversation's frequent push traffic from endlessly deferring the
+// backup visit that would resolve it — touchSynced runs on every push
+// (new message, edit, or delete), so an active conversation's normal
+// due-interval can keep getting pushed back indefinitely, which is
+// exactly the scenario most likely to have something pending in the
+// first place.
 const pendingResolutionConversations = new Set<string>();
+
+// Same signal as pendingResolutionConversations, but keeping the specific
+// message id(s) involved rather than just the conversation — purely for
+// MessagePendingListener (the dashboard's per-message "still loading"
+// indicator), which needs to know WHICH message to show a spinner on, not
+// just which conversation to prioritize revisiting. Kept as a second,
+// separate structure rather than folding pendingResolutionConversations
+// into a Map<conversationId, Set<messageId>> so the already-working
+// priority-queue routing in startVisitLoop's tick() stays untouched.
+const pendingResolutionMessagesByConversation = new Map<string, Set<string>>();
 
 // Set by startVisitLoop while it's running, so a push that just marked a
 // conversation pending can cancel whatever sleep the loop is currently in
@@ -117,7 +145,7 @@ let wakeVisitLoop: (() => void) | null = null;
  * arrive independently of whatever the visit loop is doing on the shared
  * tab, and don't need to queue behind it.
  */
-function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener): void {
+function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener, onMessagePending?: MessagePendingListener): void {
   const conv = getTrackedConversation(pushed.conversationId);
   if (!conv) return; // not tracked yet — discovery will pick it up on its own schedule
 
@@ -136,6 +164,12 @@ function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener): voi
     // meaningfully update.
     return;
   }
+
+  // Fetched BEFORE recordObservedMessage below, which — if this push
+  // actually changes anything — makes pushed.content the new latest
+  // revision. Only meaningful in the edit/delete case (a "new" message
+  // has no prior revision at all), but cheap enough to always fetch.
+  const priorRevision = getLatestRevision(pushed.messageId);
 
   const observedAt = new Date().toISOString();
   const rev = recordObservedMessage({
@@ -158,8 +192,22 @@ function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener): voi
   // blind spot (see pendingResolutionConversations above), not a no-op —
   // a real reaction/no-op has an empty SENDER too and is already filtered
   // out entirely upstream in trouter.ts, so this can't misfire on those.
-  if (pushed.kind === "new" && pushed.content === "" && pushed.sender) {
+  //
+  // Separately: if push just recorded a REAL change (rev is truthy) over
+  // a message whose previous revision had attachment markers, push's own
+  // content can never account for those — its content is always
+  // attachment-blind — so treat that the same as the empty-content case
+  // regardless of push kind, most importantly for an edit.
+  const droppedKnownAttachments = !!rev && !!priorRevision?.content.includes("[[ATTACHMENT|");
+  if ((pushed.kind === "new" && pushed.content === "" && pushed.sender) || droppedKnownAttachments) {
     pendingResolutionConversations.add(pushed.conversationId);
+    let pendingMessages = pendingResolutionMessagesByConversation.get(pushed.conversationId);
+    if (!pendingMessages) {
+      pendingMessages = new Set();
+      pendingResolutionMessagesByConversation.set(pushed.conversationId, pendingMessages);
+    }
+    pendingMessages.add(pushed.messageId);
+    onMessagePending?.(pushed.messageId, true);
     wakeVisitLoop?.();
   }
 
@@ -170,10 +218,10 @@ function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener): voi
 }
 
 /** Wires up real-time push-based detection for every tracked conversation, via the one Trouter connection this tab already has open. */
-export function startPushListener(page: Page, notify: ChangeListener): void {
+export function startPushListener(page: Page, notify: ChangeListener, onMessagePending?: MessagePendingListener): void {
   attachMessagePushListener(page, (msg) => {
     try {
-      handlePushedMessage(msg, notify);
+      handlePushedMessage(msg, notify, onMessagePending);
     } catch (err) {
       console.error("[watcher] failed to handle pushed message:", err);
     }
@@ -343,10 +391,11 @@ export async function startDiscoveryLoop(page: Page): Promise<() => void> {
 export async function catchUpAllTracked(
   page: Page,
   notify: ChangeListener,
-  onSyncStatus?: SyncListener
+  onSyncStatus?: SyncListener,
+  onMessagePending?: MessagePendingListener
 ): Promise<void> {
   for (const conv of listTrackedConversations()) {
-    await withPage(() => visitConversation(page, conv, notify, onSyncStatus)).catch((err) =>
+    await withPage(() => visitConversation(page, conv, notify, onSyncStatus, onMessagePending)).catch((err) =>
       console.error(`[watcher] catch-up failed for "${conv.title}":`, err)
     );
   }
@@ -399,7 +448,8 @@ async function visitConversation(
   page: Page,
   conv: TrackedConversation,
   notify: ChangeListener,
-  onSyncStatus?: SyncListener
+  onSyncStatus?: SyncListener,
+  onMessagePending?: MessagePendingListener
 ): Promise<void> {
   onSyncStatus?.(conv.conversation_id, true);
   try {
@@ -419,6 +469,18 @@ async function visitConversation(
     // already scrolled out of the currently-rendered window, and either
     // way retrying it forever wouldn't change that.
     pendingResolutionConversations.delete(conv.conversation_id);
+
+    // Same "give up after any real attempt" treatment for the per-message
+    // signal — a real DOM pass just gave a definitive, current answer for
+    // every message flagged pending in this conversation, whether or not
+    // this particular pass actually changed anything (it may already have
+    // been correct), so tell the dashboard to stop showing a spinner on
+    // all of them now rather than leave it spinning forever.
+    const pendingMessages = pendingResolutionMessagesByConversation.get(conv.conversation_id);
+    if (pendingMessages) {
+      pendingResolutionMessagesByConversation.delete(conv.conversation_id);
+      for (const messageId of pendingMessages) onMessagePending?.(messageId, false);
+    }
   } finally {
     onSyncStatus?.(conv.conversation_id, false);
   }
@@ -436,7 +498,12 @@ async function visitConversation(
  * scheduling further visits (used when switching to a headed browser for
  * re-auth).
  */
-export function startVisitLoop(page: Page, notify: ChangeListener, onSyncStatus?: SyncListener): () => void {
+export function startVisitLoop(
+  page: Page,
+  notify: ChangeListener,
+  onSyncStatus?: SyncListener,
+  onMessagePending?: MessagePendingListener
+): () => void {
   let stopped = false;
   let scheduled: ReturnType<typeof setTimeout> | null = null;
 
@@ -475,14 +542,23 @@ export function startVisitLoop(page: Page, notify: ChangeListener, onSyncStatus?
 
     let failed = false;
     try {
-      await withPage(() => visitConversation(page, conv!, notify, onSyncStatus));
+      await withPage(() => visitConversation(page, conv!, notify, onSyncStatus, onMessagePending));
     } catch (err) {
       failed = true;
       console.error(`[watcher] visit failed for "${conv.title}":`, err);
       // Don't keep retrying a broken conversation ahead of everything
       // else every single tick — same backoff-by-falling-back-to-normal-
-      // rotation treatment as any other visit failure.
+      // rotation treatment as any other visit failure. Message-level
+      // pending state gets the same treatment as visitConversation's own
+      // success path — a repeatedly-failing conversation shouldn't leave
+      // the dashboard showing a spinner forever on a message this loop
+      // can't actually reach.
       pendingResolutionConversations.delete(conv.conversation_id);
+      const pendingMessages = pendingResolutionMessagesByConversation.get(conv.conversation_id);
+      if (pendingMessages) {
+        pendingResolutionMessagesByConversation.delete(conv.conversation_id);
+        for (const messageId of pendingMessages) onMessagePending?.(messageId, false);
+      }
     }
     if (stopped) return;
     // A failure (e.g. the browser itself became unavailable) would
