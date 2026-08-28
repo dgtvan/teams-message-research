@@ -340,7 +340,21 @@ export async function warmChatServiceToken(page: Page): Promise<void> {
     await openConversation(page, "48:notes");
     const editor = page.locator(selectors.composeBox);
     await editor.click();
-    await editor.fill(" ");
+    // A real character, not whitespace — confirmed live that a lone space
+    // does NOT trigger the typing indicator (Teams treats trimmed-empty
+    // content as "not typing"), so it never produces a chatsvc request to
+    // capture a token from at all.
+    await editor.fill("x");
+    // The typing indicator this triggers is itself debounced client-side —
+    // confirmed live that clearing the box immediately after filling it
+    // cancels the pending request before it ever goes out, capturing
+    // nothing. Poll instead of a blind fixed wait, so this finishes the
+    // moment a token actually lands rather than always paying the worst
+    // case; 5s is generous headroom over how long that debounce takes.
+    const deadline = Date.now() + 5000;
+    while (!getCachedChatServiceToken() && Date.now() < deadline) {
+      await page.waitForTimeout(200);
+    }
     await editor.fill("");
   } catch {
     // Best-effort — see doc comment above.
