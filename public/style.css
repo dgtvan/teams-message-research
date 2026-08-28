@@ -354,8 +354,6 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
   flex-direction: column;
   gap: 16px;
 }
-.detail-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
-
 /* Section 1 of the image area (small, fixed): a horizontal filmstrip of
    every image in the message. Section 2 (big, the rest of the available
    room): whichever thumbnail is selected, shown large and zoomable. */
