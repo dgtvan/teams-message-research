@@ -363,9 +363,23 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
         // up as a completely empty message (not even an [[ATTACHMENT]]
         // marker) before this — bodyEl.innerText saw nothing there at all.
         // No real filename exists for a pasted image (unlike an uploaded
-        // file), so it gets a positional placeholder name here;
-        // attachments.ts appends the real extension once it knows the
-        // actual content type from the captured bytes.
+        // file), so a name is synthesized here from Teams' own object id —
+        // NOT from position in the loop. It used to be positional
+        // ("pasted-image-1", "pasted-image-2", ...), which is exactly what
+        // caused a confirmed-live bug: editing a multi-image message to
+        // remove any image other than the last one shifts every later
+        // image's DOM position by one, so its positional name collides
+        // with an EXISTING attachment_snapshots row already saved under
+        // that name for the ORIGINAL (now different) image that used to
+        // sit there — resolveAttachmentMarkers then silently reuses those
+        // stale bytes instead of downloading the real current image,
+        // which showed up as "wrong image"/"wrong order" after an edit.
+        // The object id (embedded in both data-orig-src and the element's
+        // own id, "x_<objectId>") identifies the actual image itself and
+        // survives edits/reorders/revisits unchanged, so the same photo
+        // always maps to the same name regardless of what position it's
+        // currently rendered in. attachments.ts appends the real extension
+        // once it knows the actual content type from the captured bytes.
         if (bodyEl) {
           const inlineImages = Array.from(
             bodyEl.querySelectorAll('[itemtype="http://schema.skype.com/AMSImage"] img')
@@ -373,8 +387,10 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
           let pastedIndex = 0;
           for (const imgEl of inlineImages) {
             pastedIndex++;
-            const name = `pasted-image-${pastedIndex}`;
             const remoteUrl = imgEl.getAttribute("data-orig-src") || "";
+            const objectIdMatch = /\/objects\/([^/]+)\//.exec(remoteUrl);
+            const objectId = objectIdMatch?.[1] || imgEl.id.replace(/^x_/, "") || `unknown-${pastedIndex}`;
+            const name = `pasted-image-${objectId}`;
             attachments.push({ name, url: remoteUrl });
             if (imgEl.src.startsWith("blob:")) {
               try {
