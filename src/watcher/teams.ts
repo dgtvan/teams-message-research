@@ -315,6 +315,39 @@ export async function sendMessage(page: Page, conversationId: string, text: stri
 }
 
 /**
+ * Proactively triggers chatsvc token acquisition at startup, so the REST
+ * fast path (sendMessageViaRest) already has a cached token by the time a
+ * real send happens — instead of the first real send being the one to pay
+ * the DOM-fallback cost (see the token-cache comment above: nothing short
+ * of an actual chatsvc request reliably produces one).
+ *
+ * Deliberately targets the account's own private "notes to self" thread
+ * (id "48:notes", present in the left rail for essentially every Teams
+ * account) rather than any real conversation: focusing the compose box
+ * fires the same Control/Typing request a real send does, which would
+ * otherwise flash a "is typing…" indicator at a real recipient for no
+ * reason. Never presses Enter, so nothing is actually sent even there.
+ *
+ * Best-effort and silent: if "48:notes" isn't in the left rail (e.g. this
+ * account has never opened it) or the conversation can't be opened in
+ * time, this just does nothing — a real send still works fine via the DOM
+ * fallback, same as before this existed.
+ */
+export async function warmChatServiceToken(page: Page): Promise<void> {
+  ensureChatTokenCapture(page);
+  if (getCachedChatServiceToken()) return;
+  try {
+    await openConversation(page, "48:notes");
+    const editor = page.locator(selectors.composeBox);
+    await editor.click();
+    await editor.fill(" ");
+    await editor.fill("");
+  } catch {
+    // Best-effort — see doc comment above.
+  }
+}
+
+/**
  * Reads every message currently rendered in the open thread's DOM.
  *
  * Author/timestamp/edited-marker elements are looked up by id

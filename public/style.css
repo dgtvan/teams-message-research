@@ -420,35 +420,40 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
 
 .detail-files { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* Accordion behavior, modeled directly on VS Code's sidebar sections
-   (Source Control's REPOSITORIES/CHANGES/GRAPH): collapsed means just the
-   header, and since .detail-body is a flex column, an auto top-margin on
-   a collapsed section pushes that header all the way down to the bottom
-   of the panel rather than leaving it sitting right under whatever
-   section came before it with dead space beneath — margin-top:auto stays
-   on regardless of expanded state, so a manually shrunk section (see
-   .custom-height below) stays docked to the bottom too, opening up space
-   ABOVE it rather than leaving a gap below. Freshly expanded (no manual
-   height yet) means the section claims ALL remaining vertical space down
-   to the bottom of the panel (flex: 1) as a default, not a hard rule —
-   dragging .detail-history-resizer overrides that to an explicit height
-   (adds .custom-height, see app.js). min-height: 0 is required on both
-   the section and the list below so a flex child is allowed to actually
-   shrink/scroll internally instead of forcing the whole panel to
-   overflow. */
-.detail-history {
+/* Generic collapsible/resizable detail-panel section — "Attachments",
+   "History", and whatever gets added next all share this. Modeled directly
+   on VS Code's sidebar sections (Source Control's REPOSITORIES/CHANGES/
+   GRAPH): collapsed means just the header. The group of sections lives in
+   .detail-sections below, which docks the WHOLE group to the bottom of the
+   panel — see its justify-content:flex-end — so multiple collapsed
+   sections stack directly on top of one another instead of each fending
+   for itself. Freshly expanded (no manual height yet) means the section
+   claims ALL remaining vertical space down to the bottom of the panel
+   (flex: 1) as a default, not a hard rule — dragging .detail-section-
+   resizer overrides that to an explicit height (adds .custom-height, see
+   app.js). min-height: 0 is required on both the section and the body
+   below so a flex child is allowed to actually shrink/scroll internally
+   instead of forcing the whole panel to overflow. */
+.detail-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: flex-end;
+}
+.detail-section {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  margin-top: auto;
 }
-.detail-history.expanded {
+.detail-section.expanded {
   flex: 1 1 auto;
 }
-.detail-history.expanded.custom-height {
+.detail-section.expanded.custom-height {
   flex: 0 0 auto;
 }
-.detail-history-toggle {
+.detail-section-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -464,9 +469,9 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
   cursor: pointer;
   text-align: left;
 }
-.detail-history-toggle:hover { color: #ccc; }
-.detail-history-chevron { display: inline-block; transition: transform 0.12s ease; font-size: 9px; }
-.detail-history-toggle.expanded .detail-history-chevron { transform: rotate(90deg); }
+.detail-section-toggle:hover { color: #ccc; }
+.detail-section-chevron { display: inline-block; transition: transform 0.12s ease; font-size: 9px; }
+.detail-section-toggle.expanded .detail-section-chevron { transform: rotate(90deg); }
 
 /* Real, always-visible element (same treatment as .resizer, the
    panel-width divider above) — not position:absolute floating invisibly
@@ -474,7 +479,7 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
    unfindable and easy to miss onto the image gallery above it. Only
    rendered while expanded (see app.js) — nothing to resize while
    collapsed. */
-.detail-history-resizer {
+.detail-section-resizer {
   height: 6px;
   flex-shrink: 0;
   border-radius: 3px;
@@ -482,12 +487,12 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
   cursor: row-resize;
   background: #2d2d2d;
 }
-.detail-history-resizer:hover,
-.detail-history-resizer.dragging {
+.detail-section-resizer:hover,
+.detail-section-resizer.dragging {
   background: #0078d4;
 }
 
-.revision-list {
+.detail-section-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -495,6 +500,6 @@ a.attachment-chip:hover { border-color: #0078d4; color: #fff; }
   min-height: 80px;
   overflow-y: auto;
 }
-.revision-list[hidden] { display: none; }
+.detail-section-body[hidden] { display: none; }
 .revision-item { padding: 10px 12px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; }
 .revision-meta { font-size: 11px; color: #999; margin-bottom: 3px; }

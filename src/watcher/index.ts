@@ -21,6 +21,7 @@ import {
   sendMessage as sendMessageInPage,
   sendMessageViaRest,
   toObservedMessages,
+  warmChatServiceToken,
   type DiscoveredConversation,
 } from "./teams.js";
 import { attachMessagePushListener, type PushedMessage } from "./trouter.js";
@@ -419,6 +420,18 @@ export async function catchUpAllTracked(
       console.error(`[watcher] catch-up failed for "${conv.title}":`, err)
     );
   }
+}
+
+/**
+ * Runs the REST fast path's token warm-up (see warmChatServiceToken in
+ * teams.ts) through withPage, same as any other DOM-touching operation —
+ * meant to be called once, early at startup, so a real send later doesn't
+ * have to be the one paying for it.
+ */
+export async function warmSendPath(page: Page): Promise<void> {
+  const t0 = Date.now();
+  await withPage(() => warmChatServiceToken(page));
+  console.log(`[send] warm-up took ${Date.now() - t0}ms`);
 }
 
 /**

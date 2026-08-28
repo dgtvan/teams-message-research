@@ -6,6 +6,7 @@ import {
   startDiscoveryLoop,
   startPushListener,
   startVisitLoop,
+  warmSendPath,
 } from "./watcher/index.js";
 import { isOnLoginPage, waitUntilLoggedIn, watchForReauth } from "./watcher/auth.js";
 import { startServer } from "./server/index.js";
@@ -75,6 +76,11 @@ async function runHeadlessSession(
     });
 
     startPushListener(page, notifyUpdate, notifyMessagePending);
+    // Enqueued ahead of catchUpAllTracked's own per-conversation withPage
+    // calls below (both queue through the same shared-tab lock), so the
+    // send-path warm-up runs first instead of waiting behind however many
+    // conversations catch-up ends up visiting.
+    warmSendPath(page).catch((err) => console.error("[watcher] send-path warm-up failed:", err));
     catchUpAllTracked(page, notifyUpdate, notifySync, notifyMessagePending)
       .then(() => startDiscoveryLoop(page))
       .then((stop) => {

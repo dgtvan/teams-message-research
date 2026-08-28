@@ -560,120 +560,148 @@ async function showMessageDetail(messageId) {
     )
     .join("");
 
+  const attachmentCount = images.length + files.length;
+  const attachmentsHtml = attachmentCount
+    ? `${renderImageGallerySection(images)}${files.length ? renderAttachments(files, true) : ""}`
+    : `<div class="empty-state">No attachments on this message.</div>`;
+
   detailBody.innerHTML = `
-    <div class="detail-meta">
-      <span class="message-sender" style="color:${colorForSender(listEntry.sender)}">${escapeHtml(listEntry.sender ?? "Unknown")}</span>
-      <span class="message-time">${new Date(latest.captured_at).toLocaleString()}</span>
-      ${latest.edited_flag ? '<span class="edited-tag">(edited)</span>' : ""}
-    </div>
-    ${renderBody(latest.content, !!latest.is_deleted, { includeAttachments: false, pending: pendingMessageIds.has(messageId) })}
-    ${renderImageGallerySection(images)}
-    ${files.length ? renderAttachments(files, true) : ""}
-    <div class="detail-history${historyExpanded ? " expanded" : ""}${historyExpanded && historyHeightPx ? " custom-height" : ""}">
-      <div class="detail-history-resizer"${historyExpanded ? "" : " hidden"} title="Drag to resize"></div>
-      <button type="button" class="detail-history-toggle${historyExpanded ? " expanded" : ""}">
-        <span class="detail-history-chevron">▶</span>History (${revisions.length})
-      </button>
-      <div class="revision-list"${historyExpanded ? "" : " hidden"} style="${historyHeightPx ? `height:${historyHeightPx}px` : ""}">${historyHtml}</div>
+    <div class="detail-sections">
+      ${renderDetailSection("attachments", "Attachments", attachmentCount, attachmentsHtml)}
+      ${renderDetailSection("history", "History", revisions.length, historyHtml)}
     </div>
   `;
 
   wireImageGallery(detailBody, images);
-  wireHistorySection(detailBody);
+  wireDetailSection(detailBody, "attachments");
+  wireDetailSection(detailBody, "history");
 }
 
-// Collapsed by default, expanded state remembered across message switches
-// (a whole panel rebuild — not a plain DOM show/hide — since
-// showMessageDetail replaces detailBody.innerHTML wholesale each time) so
-// re-selecting a message or a live-update refresh doesn't quietly re-close
-// something you just opened.
+// --- Generic collapsible/resizable detail-panel sections ("Attachments",
+// "History", and whatever gets added next). Collapsed by default; expanded
+// state and manual height are remembered across message switches (a whole
+// panel rebuild — not a plain DOM show/hide — since showMessageDetail
+// replaces detailBody.innerHTML wholesale each time) so re-selecting a
+// message or a live-update refresh doesn't quietly re-close or re-size
+// something the user just set.
 //
 // Sizing is accordion-style (VS Code's sidebar sections are the reference
-// point) BY DEFAULT: collapsed means just the header, pushed to the bottom
-// of the panel (see .detail-history's margin-top:auto in style.css);
-// freshly expanded means the section claims all remaining space down to
-// the bottom of the panel (.detail-history.expanded { flex: 1 1 auto }).
-// On top of that default, the section is still manually resizable via the
-// drag handle at its top edge — dragging shrinks it away from "fill
-// everything" to an explicit height, while margin-top:auto keeps it
-// docked to the bottom either way, so shrinking opens up space ABOVE it
-// rather than leaving a gap below. That explicit height (once set) is
-// remembered across messages the same way historyExpanded is.
-let historyExpanded = false;
-let historyHeightPx = null;
-try {
-  historyHeightPx = Number(localStorage.getItem("detailHistoryHeight")) || null;
-} catch {
-  // Private browsing / storage disabled — just falls back to "fill" every time.
+// point) BY DEFAULT: collapsed means just the header, and the whole group
+// of sections is docked to the bottom of the panel (see .detail-sections'
+// justify-content:flex-end in style.css — that docks the GROUP, so several
+// collapsed sections stack on one another rather than each fending for
+// itself); freshly expanded means that section claims all remaining space
+// down to the bottom of the panel (.detail-section.expanded { flex: 1 1
+// auto }). On top of that default, a section is still manually resizable
+// via the drag handle at its top edge — dragging shrinks it away from
+// "fill everything" to an explicit height. That explicit height (once
+// set) is persisted per section key; expanded/collapsed is only
+// remembered for the lifetime of the page, matching the old history-only
+// behavior.
+//
+// To add another section: pick a unique key, drop a
+// renderDetailSection(key, title, count, bodyHtml) call inside the
+// `.detail-sections` wrapper above, and add a matching
+// wireDetailSection(detailBody, key) call alongside the two above.
+const sectionState = new Map(); // key -> { expanded, heightPx }
+function getSectionState(key) {
+  let state = sectionState.get(key);
+  if (!state) {
+    let heightPx = null;
+    try {
+      heightPx = Number(localStorage.getItem(`detailSectionHeight:${key}`)) || null;
+    } catch {
+      // Private browsing / storage disabled — just falls back to "fill" every time.
+    }
+    state = { expanded: false, heightPx };
+    sectionState.set(key, state);
+  }
+  return state;
+}
+
+function renderDetailSection(key, title, count, bodyHtml) {
+  const state = getSectionState(key);
+  return `
+    <div class="detail-section${state.expanded ? " expanded" : ""}${state.expanded && state.heightPx ? " custom-height" : ""}" data-section-key="${key}">
+      <div class="detail-section-resizer"${state.expanded ? "" : " hidden"} title="Drag to resize"></div>
+      <button type="button" class="detail-section-toggle${state.expanded ? " expanded" : ""}">
+        <span class="detail-section-chevron">▶</span>${title} (${count})
+      </button>
+      <div class="detail-section-body"${state.expanded ? "" : " hidden"} style="${state.heightPx ? `height:${state.heightPx}px` : ""}">${bodyHtml}</div>
+    </div>
+  `;
 }
 
 // Drag state lives at module scope, and its mousemove/mouseup listeners
-// are attached exactly ONCE below (not inside wireHistorySection) — that
+// are attached exactly ONCE below (not inside wireDetailSection) — that
 // function re-runs on every single message click, since showMessageDetail
 // replaces detailBody.innerHTML each time, and attaching fresh
 // window-level listeners on every one of those calls without ever
 // removing the old ones would leak a new listener per click forever. The
 // resizer bar and section are fresh elements each render, so wiring their
 // own mousedown/class directly each time is fine.
-let historyResizeSection = null;
-let historyResizeBody = null;
-let historyResizeBar = null;
-let historyResizeStartY = 0;
-let historyResizeStartHeight = 0;
+let sectionResizeKey = null;
+let sectionResizeBody = null;
+let sectionResizeBar = null;
+let sectionResizeStartY = 0;
+let sectionResizeStartHeight = 0;
 
 window.addEventListener("mousemove", (e) => {
-  if (!historyResizeBody) return;
+  if (!sectionResizeBody) return;
   // The handle sits on the section's TOP edge — dragging UP (clientY
   // decreasing) has to GROW the box (pulling the boundary up claims more
   // room from the sections above) and dragging DOWN has to shrink it.
   const height = Math.min(
-    Math.max(historyResizeStartHeight - (e.clientY - historyResizeStartY), 80),
+    Math.max(sectionResizeStartHeight - (e.clientY - sectionResizeStartY), 80),
     window.innerHeight * 0.7
   );
-  historyResizeBody.style.height = `${height}px`;
+  sectionResizeBody.style.height = `${height}px`;
 });
 window.addEventListener("mouseup", () => {
-  if (!historyResizeBody) return;
-  historyHeightPx = historyResizeBody.offsetHeight;
+  if (!sectionResizeBody) return;
+  const state = getSectionState(sectionResizeKey);
+  state.heightPx = sectionResizeBody.offsetHeight;
   try {
-    localStorage.setItem("detailHistoryHeight", String(historyHeightPx));
+    localStorage.setItem(`detailSectionHeight:${sectionResizeKey}`, String(state.heightPx));
   } catch {
     // Fine to just not persist it.
   }
-  historyResizeBar?.classList.remove("dragging");
-  historyResizeSection = null;
-  historyResizeBody = null;
-  historyResizeBar = null;
+  sectionResizeBar?.classList.remove("dragging");
+  sectionResizeKey = null;
+  sectionResizeBody = null;
+  sectionResizeBar = null;
   document.body.style.userSelect = "";
 });
 
-function wireHistorySection(container) {
-  const section = container.querySelector(".detail-history");
-  const toggle = container.querySelector(".detail-history-toggle");
-  const body = container.querySelector(".revision-list");
-  const bar = container.querySelector(".detail-history-resizer");
+function wireDetailSection(container, key) {
+  const section = container.querySelector(`.detail-section[data-section-key="${key}"]`);
+  const toggle = section?.querySelector(".detail-section-toggle");
+  const body = section?.querySelector(".detail-section-body");
+  const bar = section?.querySelector(".detail-section-resizer");
   if (!section || !toggle || !body) return;
 
+  const state = getSectionState(key);
+
   toggle.onclick = () => {
-    historyExpanded = !historyExpanded;
-    section.classList.toggle("expanded", historyExpanded);
-    section.classList.toggle("custom-height", historyExpanded && !!historyHeightPx);
-    toggle.classList.toggle("expanded", historyExpanded);
-    body.hidden = !historyExpanded;
-    if (bar) bar.hidden = !historyExpanded; // resizing a collapsed section makes no sense
+    state.expanded = !state.expanded;
+    section.classList.toggle("expanded", state.expanded);
+    section.classList.toggle("custom-height", state.expanded && !!state.heightPx);
+    toggle.classList.toggle("expanded", state.expanded);
+    body.hidden = !state.expanded;
+    if (bar) bar.hidden = !state.expanded; // resizing a collapsed section makes no sense
   };
 
   if (bar) {
     bar.onmousedown = (e) => {
-      historyResizeSection = section;
-      historyResizeBody = body;
-      historyResizeBar = bar;
-      historyResizeStartY = e.clientY;
-      historyResizeStartHeight = body.offsetHeight;
+      sectionResizeKey = key;
+      sectionResizeBody = body;
+      sectionResizeBar = bar;
+      sectionResizeStartY = e.clientY;
+      sectionResizeStartHeight = body.offsetHeight;
       // Switch off the default "fill everything" flex right away, not on
-      // mouseup — otherwise .detail-history stays flex:1 (fill) for the
+      // mouseup — otherwise .detail-section stays flex:1 (fill) for the
       // whole drag, which fights every height we set on mousemove (its
-      // flex-grow just snaps the list back to fill the full box every
+      // flex-grow just snaps the body back to fill the full box every
       // frame) and the resize would only visibly "jump" once at the end.
       section.classList.add("custom-height");
       bar.classList.add("dragging");
