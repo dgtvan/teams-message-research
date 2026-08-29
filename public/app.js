@@ -864,5 +864,17 @@ function connectWebSocket() {
   };
 }
 
+// --- Top-level page switcher (Teams / Topics) ---
+const pages = {
+  teams: document.getElementById("teamsPage"),
+  topics: document.getElementById("topicsPage"),
+};
+document.querySelectorAll(".page-tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".page-tab").forEach((b) => b.classList.toggle("active", b === btn));
+    for (const [key, el] of Object.entries(pages)) el.hidden = key !== btn.dataset.page;
+  };
+});
+
 loadTabs();
 connectWebSocket();

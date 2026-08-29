@@ -50,6 +50,36 @@ body {
   flex-shrink: 0;
 }
 
+/* Top-level page switcher (Teams / Topics) — a plain row of buttons in the
+   VS Code editor-tab style, sitting above everything else including the
+   auth banner's own layout slot. Each .page below is a full flex child
+   that fills the rest of the viewport; only the active one is unhidden,
+   so switching pages doesn't tear down the other's DOM/state (e.g. the
+   Teams page's open WebSocket-driven view). */
+.page-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  background: #252526;
+  border-bottom: 1px solid #3a3a3a;
+  flex-shrink: 0;
+}
+.page-tab {
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #999;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.page-tab:hover { color: #ccc; }
+.page-tab.active { color: #fff; border-bottom-color: #0078d4; }
+
+.page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.page[hidden] { display: none; }
+
 .layout { display: flex; flex: 1; min-height: 0; }
 
 .sidebar {
