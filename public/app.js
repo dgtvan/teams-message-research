@@ -89,6 +89,11 @@ async function selectConversation(id, title) {
   activeConversationId = id;
   emptyState.hidden = true;
   conversationView.hidden = false;
+  // Shown as soon as a conversation is open, not just once a message is
+  // selected — otherwise there's nothing to drag until you've clicked a
+  // message once, which is the awkward part this is fixing.
+  detailPanel.hidden = false;
+  resizer.hidden = false;
   conversationTitle.textContent = title;
   // A draft in progress for the PREVIOUS conversation shouldn't silently
   // carry over and get sent to this one instead.
@@ -519,16 +524,16 @@ function wireImageGallery(container, images) {
 
 function closeDetailPanel() {
   selectedMessageId = null;
-  detailPanel.hidden = true;
-  resizer.hidden = true;
+  // The panel itself stays visible (see selectConversation) so the
+  // resizer stays draggable — this just clears its content back to a
+  // placeholder instead of hiding the whole panel.
+  detailBody.innerHTML = `<div class="empty-state">Select a message to view its details.</div>`;
   document.querySelectorAll(".message.selected").forEach((el) => el.classList.remove("selected"));
 }
 document.getElementById("detailClose").onclick = closeDetailPanel;
 
 async function showMessageDetail(messageId) {
   selectedMessageId = messageId;
-  detailPanel.hidden = false;
-  resizer.hidden = false;
   for (const el of messageList.children) {
     el.classList.toggle("selected", el.dataset.messageId === messageId);
   }
