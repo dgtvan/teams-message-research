@@ -6,7 +6,6 @@ import {
   startDiscoveryLoop,
   startPushListener,
   startVisitLoop,
-  warmSendPath,
 } from "./watcher/index.js";
 import { isOnLoginPage, waitUntilLoggedIn, watchForReauth } from "./watcher/auth.js";
 import { startServer } from "./server/index.js";
@@ -63,16 +62,6 @@ async function runHeadlessSession(
   setSendHandler((conversationId, text) => sendMessageTo(page, conversationId, text));
   await new Promise<void>((resolve) => {
     let stopDiscovery = () => {};
-
-    // Called before startVisitLoop deliberately, not just before
-    // catchUpAllTracked: withPage's queue is First-In, whoever's first
-    // withPage() call actually EXECUTES wins, and startVisitLoop's first
-    // tick() runs entirely synchronously (plain DB reads, no awaits) up to
-    // its own withPage() call — so with something always due on a fresh
-    // start, it would otherwise win this race every time, deterministically,
-    // not just occasionally. Confirmed live as the exact cause of an ~8s
-    // gap between warm-up's own internal timing and its wall-clock total.
-    warmSendPath(page).catch((err) => console.error("[watcher] send-path warm-up failed:", err));
     const stopVisits = startVisitLoop(page, notifyUpdate, notifySync, notifyMessagePending);
 
     const stopWatching = watchForReauth(page, () => {
