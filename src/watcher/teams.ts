@@ -184,7 +184,6 @@ function ensureChatTokenCapture(page: Page): void {
     if (req.method() !== "POST" || !req.url().includes("/api/chatsvc/")) return;
     const auth = req.headers()["authorization"];
     const token = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
-    console.log(`[send] observed chatsvc POST ${req.url()} (auth header ${token ? "present" : "MISSING"})`);
     if (!token) return;
     const expiresAtMs = decodeJwtExpiryMs(token) ?? Date.now() + 5 * 60_000;
     cachedToken = { secret: token, expiresAtMs };
@@ -339,31 +338,45 @@ export async function warmChatServiceToken(page: Page): Promise<void> {
   if (getCachedChatServiceToken()) return;
   const t0 = Date.now();
   try {
-    await openConversation(page, "48:notes");
-    console.log(`[send] warm-up: conversation opened after ${Date.now() - t0}ms`);
+    // Retried too: confirmed live openConversation's own click can time out
+    // here specifically because this runs deliberately early (ahead of
+    // startVisitLoop, to win the withPage queue race above) — early enough
+    // that the left rail's initial render may not have reached "48:notes"
+    // yet, not because the conversation doesn't exist. A short pause before
+    // one retry is enough; openConversation's own 8s click timeout already
+    // did the actual waiting the first time.
+    try {
+      await openConversation(page, "48:notes");
+    } catch {
+      await page.waitForTimeout(1000);
+      await openConversation(page, "48:notes");
+    }
     const editor = page.locator(selectors.composeBox);
     await editor.click();
-    // A real character, not whitespace — confirmed live that a lone space
-    // does NOT trigger the typing indicator (Teams treats trimmed-empty
-    // content as "not typing"), so it never produces a chatsvc request to
-    // capture a token from at all.
-    await editor.fill("x");
-    // The typing indicator this triggers is itself debounced client-side —
-    // confirmed live that clearing the box immediately after filling it
-    // cancels the pending request before it ever goes out, capturing
-    // nothing. Poll instead of a blind fixed wait, so this finishes the
-    // moment a token actually lands rather than always paying the worst
-    // case; 5s is generous headroom over how long that debounce takes.
-    const deadline = Date.now() + 5000;
-    while (!getCachedChatServiceToken() && Date.now() < deadline) {
-      await page.waitForTimeout(200);
+
+    // Retried, not one-shot: confirmed live a single fill+wait doesn't
+    // reliably produce the typing-indicator request this depends on —
+    // exact cause unconfirmed (Teams-side debounce/throttle is the
+    // working theory), but several consecutive single-attempt misses
+    // against the same conversation were observed live. Each attempt
+    // fills different content, in case an identical refill is part of
+    // what gets treated as a no-op. Cheap insurance either way: worst
+    // case this loop still finds nothing and a real send just falls back
+    // to the DOM path once, same as before this existed at all.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts && !getCachedChatServiceToken(); attempt++) {
+      await editor.fill(`warming up ${attempt}`);
+      const deadline = Date.now() + 3000;
+      while (!getCachedChatServiceToken() && Date.now() < deadline) {
+        await page.waitForTimeout(200);
+      }
     }
+    await editor.fill("");
     console.log(
       getCachedChatServiceToken()
-        ? `[send] warm-up: token captured after ${Date.now() - t0}ms total`
-        : `[send] warm-up: no token captured after ${Date.now() - t0}ms total (typing indicator never fired?)`
+        ? `[send] warm-up: token captured after ${Date.now() - t0}ms`
+        : `[send] warm-up: gave up after ${Date.now() - t0}ms — first real send will fall back to the DOM path`
     );
-    await editor.fill("");
   } catch (err) {
     console.log(`[send] warm-up: threw after ${Date.now() - t0}ms: ${err instanceof Error ? err.message : String(err)}`);
   }
