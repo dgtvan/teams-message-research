@@ -9,6 +9,7 @@
       "runtimeArgs": ["${workspaceFolder}/node_modules/tsx/dist/cli.mjs", "${workspaceFolder}/src/index.ts"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "env": { "WATCHER_NO_OPEN_BROWSER": "1" },
       "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**"]
     }
   ]
