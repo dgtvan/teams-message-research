@@ -85,7 +85,7 @@ function toBigIntOrNull(id: string | null | undefined): bigint | null {
 // Conversations with at least one message that arrived via push in a
 // state push can't fully represent on its own — push can't extract
 // attachments at all (see handlePushedMessage below and
-// renderPendingPlaceholder in app.js), so two shapes both count as
+// renderPendingPlaceholder in app.js), so three shapes count as
 // "probably incomplete, needs a DOM pass to reconcile":
 //   1. A genuinely NEW message with empty content and a real sender —
 //      the signature of an attachment-only message (a real reaction has
@@ -111,6 +111,16 @@ function toBigIntOrNull(id: string | null | undefined): bigint | null {
 //      conversation's OWN follow-up push traffic kept resetting
 //      touchSynced (see below) and deferring the backup visit that would
 //      have caught and fixed it, for far longer than "eventually".
+//   3. Any push (new or edit) whose raw content carries a quoted-reply
+//      card (trouter.ts's hasQuote) — push's flattened text is all
+//      app.js's render-time heuristic has to identify the quote from, and
+//      that heuristic requires a parseable timestamp it isn't always
+//      given (confirmed live: a self-quote's raw pushed HTML had no
+//      timestamp text at all for the quoted-reply-card's timestamp
+//      element), so an unresolved quote push doesn't just miss its
+//      timestamp — it renders as broken run-on text until a DOM pass
+//      overwrites it with the structural [[QUOTE|...]] extraction
+//      (teams.ts), which doesn't depend on the timestamp being present.
 // The backup visit loop checks this set first, ahead of its normal
 // interval-based rotation, since a REST/HTTP alternative to DOM
 // extraction isn't viable here — both the chatsvc endpoint and the
@@ -215,10 +225,21 @@ function handlePushedMessage(pushed: PushedMessage, notify: ChangeListener, onMe
   // carry the image itself, so it's the same "needs a DOM pass" case.
   const droppedKnownAttachments = !!rev && !!priorRevision?.content.includes("[[ATTACHMENT|");
   const pushedInlineImage = !!pushed.sender && pushed.hasInlineImage;
+  // A quote-bearing push (trouter.ts's hasQuote) has the same problem as
+  // an inline image: push's flattened text is all app.js has to work
+  // with, and its heuristic split can't reliably find the quote header
+  // without a parseable timestamp — which a self-quote's raw HTML can
+  // omit entirely (confirmed live, see hasQuote's own comment). Routed
+  // through the same pending-resolution fast path so the backup DOM pass
+  // (which extracts the quote structurally, timestamp or not — see
+  // teams.ts) overwrites it within moments instead of up to the full
+  // 5min+jitter backup interval.
+  const pushedQuote = !!pushed.sender && pushed.hasQuote;
   if (
     (pushed.kind === "new" && pushed.content === "" && pushed.sender) ||
     droppedKnownAttachments ||
-    pushedInlineImage
+    pushedInlineImage ||
+    pushedQuote
   ) {
     pendingResolutionConversations.add(pushed.conversationId);
     let pendingMessages = pendingResolutionMessagesByConversation.get(pushed.conversationId);

@@ -57,6 +57,27 @@ export interface PushedMessage {
    * interval that should have caught it on the normal rotation).
    */
   hasInlineImage: boolean;
+  /**
+   * True when the RAW resource.content contains Teams' own
+   * data-tid="quoted-reply-card" marker — same idea as hasInlineImage
+   * above, for the same underlying reason: push can carry the quoted
+   * message's HTML, but the quoted-reply-card's timestamp sub-element can
+   * come through with no text at all (confirmed live on a self-quote,
+   * "Van Dang Thai" quoting their own "1" and replying "x" — the raw
+   * pushed content was "Van Dang Thai\n1\n\nx", with no timestamp line
+   * whatsoever between author and quoted text). app.js's splitQuotedReply
+   * is a flattened-text heuristic that requires a recognizable timestamp
+   * to identify the quote header at all, so a missing one isn't just a
+   * missing timestamp display — the whole quote goes undetected and
+   * renders as broken run-on text until a DOM pass overwrites it with the
+   * structural [[QUOTE|...]] extraction (teams.ts), which doesn't depend
+   * on the timestamp being present. Flagging it here lets
+   * handlePushedMessage (watcher/index.ts) route a quote-bearing push
+   * through the same pending-resolution fast path already used for
+   * attachments/inline images, instead of leaving it to the up-to-5min
+   * backup rotation.
+   */
+  hasQuote: boolean;
 }
 
 function parseTrouterFrame(text: string): PushedMessage | null {
@@ -106,6 +127,7 @@ function parseTrouterFrame(text: string): PushedMessage | null {
   const content = htmlToText(rawContent);
   const sender = typeof r.imdisplayname === "string" ? r.imdisplayname : null;
   const hasInlineImage = /<img\b/i.test(rawContent);
+  const hasQuote = /data-tid=["']quoted-reply-card["']/i.test(rawContent);
 
   // Confirmed live (two phantom rows in the "Daily Scrum" conversation,
   // message_ids 1787818820426 / 1787818877035): Teams also pushes
@@ -146,6 +168,7 @@ function parseTrouterFrame(text: string): PushedMessage | null {
     timestamp:
       typeof r.originalarrivaltime === "string" ? r.originalarrivaltime : new Date().toISOString(),
     hasInlineImage,
+    hasQuote,
   };
 }
 
