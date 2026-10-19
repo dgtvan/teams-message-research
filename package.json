@@ -7,13 +7,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prestart": "node scripts/free-port.mjs",
-    "start": "node dist/index.js",
+    "start": "node --env-file-if-exists=.env dist/index.js",
     "predev": "node scripts/free-port.mjs",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --env-file-if-exists=.env src/index.ts",
     "free-port": "node scripts/free-port.mjs",
-    "clone-debug-data": "node scripts/clone-debug-data.mjs"
+    "clone-debug-data": "node scripts/clone-debug-data.mjs",
+    "build-teams-app": "node scripts/build-teams-app.mjs",
+    "bot-harness": "node scripts/bot-activity-harness.mjs"
   },
   "dependencies": {
+    "botbuilder": "^4.23.3",
     "express": "^4.19.2",
     "playwright": "^1.47.0",
     "ws": "^8.18.0"

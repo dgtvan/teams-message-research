@@ -63,6 +63,22 @@
   run) — only set it for a debugging session, and only on an instance you
   started for that purpose.
 
+- **The `teams-bot` connector needs none of the browser caution above.**
+  `WATCHER_CONNECTOR=teams-bot` drives no browser at all, so there's no
+  profile lock to collide with and no reason to avoid restarting it. It
+  binds a local port (`WATCHER_BOT_PORT`, default 3978) instead, so that
+  is the thing two sessions can fight over. With no
+  `MICROSOFT_APP_ID`/`MICROSOFT_APP_PASSWORD` set it runs unauthenticated
+  on loopback, which is what makes it fully testable offline:
+  ```
+  WATCHER_CONNECTOR=teams-bot WATCHER_DATA_DIR=data/bot-test WATCHER_PORT=4175 WATCHER_NO_OPEN_BROWSER=1 npm run dev
+  npm run bot-harness   # posts synthetic Teams activities at it (separate terminal)
+  ```
+  Prefer this for anything that isn't specifically about the browser path
+  — it exercises ingest, revisions, tracking and the dashboard end to end
+  with no Teams account involved. Never expose it through a tunnel while
+  unauthenticated.
+
 - **Check what's already running before starting anything**
   (`tasklist //FI "IMAGENAME eq node.exe"` on Windows). Even with the
   isolation above, starting a browser-touching session while the user's is
@@ -76,7 +92,7 @@
 
 - **Self-healing**: the backup visit loop re-extracts every currently
   visible message on every visit, not just new ones (see
-  `extractAndRecordNew` in `src/watcher/index.ts`), and
+  the visit loop in `src/connectors/teams-web/index.ts`), and
   `recordObservedMessage` only writes a new revision if content actually
   changed. So a fix to extraction logic doesn't need a manual backfill —
   restarting the watcher and letting it revisit conversations is usually

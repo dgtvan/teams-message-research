@@ -7,7 +7,7 @@ for work. Nothing in this repo currently uses this.
 ## What was confirmed live
 
 Using a bearer token captured off a real chatsvc request (see `sendMessageViaRest` and
-`warmChatServiceToken` in `src/watcher/teams.ts` for how sending already does this), a
+`warmChatServiceToken` in `src/connectors/teams-web/teams.ts` for how sending already does this), a
 plain `GET` against the same API family used for sending returns real data:
 
 ```
@@ -26,7 +26,7 @@ general constant).
 
 ## Why this contradicts the README's existing "REST reading is dead" note
 
-`src/watcher/chatsvc.ts` and the README both document an earlier attempt
+`src/core/html.ts` and the README both document an earlier attempt
 (`fetchMessagesSince`) that called this same `chatsvc` API and got 401 "Authentication
 failed" on every call, concluding REST reading doesn't work — because neither
 `page.request` nor an in-page `fetch` automatically attaches the Bearer token this API
@@ -48,7 +48,7 @@ replacement, it could remove:
   8s/15s/5s timeout budget per conversation
 - The `withPage` single-tab queue's biggest source of contention (every visit currently
   serializes through one shared tab)
-- Selector fragility — no dependency on `src/watcher/selectors.ts` staying in sync with
+- Selector fragility — no dependency on `src/connectors/teams-web/selectors.ts` staying in sync with
   Teams' DOM
 
 ## What's NOT yet known — needs investigation before any of this is built

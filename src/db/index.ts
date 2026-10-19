@@ -192,7 +192,7 @@ export function recordObservedMessage(msg: ObservedMessage): MessageRevision | n
   if (!changed) return null;
 
   // Push can't extract attachments/mentions/quotes at all (see
-  // watcher/trouter.ts) — a brand-new message's very first revision is
+  // connectors/teams-web/trouter.ts) — a brand-new message's very first revision is
   // sometimes just an empty placeholder, recorded so the dashboard has
   // something to attach a "fetching…" indicator to while push's own
   // blind spot gets resolved by the next DOM visit (see renderBody in

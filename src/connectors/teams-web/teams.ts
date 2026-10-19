@@ -1,7 +1,5 @@
 import type { Page } from "playwright";
-import crypto from "node:crypto";
 import { selectors } from "./selectors.js";
-import type { ObservedMessage } from "../db/index.js";
 
 export interface DiscoveredConversation {
   id: string;
@@ -138,10 +136,6 @@ export async function waitForMessagePane(page: Page, timeoutMs = 30_000): Promis
   await page.locator(selectors.messagePane).waitFor({ state: "visible", timeout: timeoutMs });
 }
 
-export function hashContent(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
-}
-
 /**
  * In-memory cache of a chatsvc bearer token, captured off the Authorization
  * header of any real chatsvc request this page makes — either one of our
@@ -232,7 +226,7 @@ function toComposeHtml(text: string): string {
  * token cache is plain in-memory state, and page.request is a
  * context-level API independent of whatever conversation happens to be
  * open — so this is safe for callers to run WITHOUT queuing behind
- * withPage's shared-tab lock (see sendMessageTo in watcher/index.ts). It
+ * withPage's shared-tab lock (see the connector's send() in ./index.ts). It
  * can't collide with an in-flight visit the way typing into the compose
  * box could.
  *
@@ -509,9 +503,9 @@ export async function extractVisibleMessages(page: Page): Promise<RawMessage[]> 
         // why they need different handling. Markers aren't baked into
         // `content` here anymore (unlike mentions above) — deciding a real
         // image's final URL needs DB access to check for/save a local
-        // snapshot (see attachments.ts), which this DOM-only layer
-        // deliberately doesn't have; that happens one level up, in
-        // watcher/index.ts. (attachments/images themselves are declared
+        // snapshot (see core/attachments.ts), which this DOM-only layer
+        // deliberately doesn't have; that happens one level up, in the
+        // connector (./index.ts). (attachments/images themselves are declared
         // further up, alongside the content-building walk — see there.)
         const grid = node.querySelector(args.attachmentGrid);
         if (grid) {
@@ -682,21 +676,3 @@ export async function extractVisibleMessagesStable(
   }
   return last;
 }
-
-export function toObservedMessages(
-  conversationId: string,
-  raw: RawMessage[],
-  observedAt: string
-): ObservedMessage[] {
-  return raw.map((m) => ({
-    messageId: m.messageId,
-    conversationId,
-    sender: m.sender,
-    content: m.content,
-    contentHash: hashContent(m.content),
-    editedFlag: m.editedFlag,
-    isDeleted: m.isDeleted,
-    observedAt,
-  }));
-}
-

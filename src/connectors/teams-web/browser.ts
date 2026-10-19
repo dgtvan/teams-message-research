@@ -1,6 +1,6 @@
 import { chromium, type BrowserContext } from "playwright";
 import fs from "node:fs";
-import { config } from "../config.js";
+import { config } from "../../config.js";
 
 /**
  * Launches a persistent Edge context under the dedicated "teams-watcher"
@@ -16,16 +16,16 @@ import { config } from "../config.js";
  * carries over across the switch.
  */
 export async function launchTeamsBrowser(headless: boolean): Promise<BrowserContext> {
-  fs.mkdirSync(config.edgeProfileDir, { recursive: true });
+  fs.mkdirSync(config.teamsWeb.edgeProfileDir, { recursive: true });
 
-  const context = await chromium.launchPersistentContext(config.edgeProfileDir, {
-    channel: config.edgeChannel,
+  const context = await chromium.launchPersistentContext(config.teamsWeb.edgeProfileDir, {
+    channel: config.teamsWeb.edgeChannel,
     headless,
     viewport: { width: 1400, height: 900 },
     // See config.ts's debugCdpPort comment — unset on a normal run, so
     // this doesn't add an args: [] entry (and therefore no open debug
     // port) unless a debugging session explicitly asked for one.
-    args: config.debugCdpPort ? [`--remote-debugging-port=${config.debugCdpPort}`] : [],
+    args: config.teamsWeb.debugCdpPort ? [`--remote-debugging-port=${config.teamsWeb.debugCdpPort}`] : [],
   });
 
   return context;

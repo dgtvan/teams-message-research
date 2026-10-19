@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation
 -- changes (edit) or it flips to deleted. Never updated in place, with one
 -- deliberate exception in recordObservedMessage (db/index.ts): filling in
 -- a message's still-empty first revision (push's "pending" placeholder —
--- see watcher/trouter.ts) completes that row rather than appending a
+-- see connectors/teams-web/trouter.ts) completes that row rather than appending a
 -- second one, since it was never a real state the message was actually
 -- in from Teams' perspective.
 CREATE TABLE IF NOT EXISTS message_revisions (
@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_revisions_message
   ON message_revisions(message_id, revision_id);
 
 -- A locally-downloaded copy of an image attachment's actual bytes (see
--- watcher/attachments.ts). Attachments otherwise aren't structured data at
+-- core/attachments.ts). Attachments otherwise aren't structured data at
 -- all — just `[[ATTACHMENT|name|url]]` marker text inside a revision's
 -- content (see app.js) — but an image needs real storage, not a marker,
 -- because the remote URL Teams gives us requires an authenticated Teams

@@ -12,7 +12,7 @@
  * so there's no live request to harvest a working header from. It failed
  * silently (empty result, no error) regardless of how long the gap was.
  * Catch-up now reuses the same DOM-based open-and-extract path as the
- * backup visit loop instead (see catchUpAllTracked in watcher/index.ts).
+ * backup visit loop instead (see catchUpAllTracked in connectors/teams-web/index.ts).
  */
 export function htmlToText(html: string): string {
   return (

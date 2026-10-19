@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { htmlToText } from "./chatsvc.js";
+import { htmlToText } from "../../core/html.js";
 
 /**
  * Teams delivers message events to the web client in real time over
@@ -43,7 +43,7 @@ export interface PushedMessage {
    * directly-pasted image and a real uploaded image render as an actual
    * `<img>` in Teams' own DOM, and resource.content is that same
    * underlying message HTML, so the tag survives into the push payload
-   * too. Lets handlePushedMessage (watcher/index.ts) recognize a message
+   * too. Lets handlePushedMessage (./index.ts) recognize a message
    * that mixes real text with an image — content is non-empty (so the
    * existing empty-content pending check doesn't fire) but still
    * push-incomplete, since push can never carry the actual image bytes.
@@ -72,7 +72,7 @@ export interface PushedMessage {
    * renders as broken run-on text until a DOM pass overwrites it with the
    * structural [[QUOTE|...]] extraction (teams.ts), which doesn't depend
    * on the timestamp being present. Flagging it here lets
-   * handlePushedMessage (watcher/index.ts) route a quote-bearing push
+   * handlePushedMessage (./index.ts) route a quote-bearing push
    * through the same pending-resolution fast path already used for
    * attachments/inline images, instead of leaving it to the up-to-5min
    * backup rotation.
@@ -151,7 +151,7 @@ function parseTrouterFrame(text: string): PushedMessage | null {
   // Scoped to kind === "new" only: a genuine deletion legitimately has
   // empty content (see the module comment) and must still be recorded, and
   // an edit/delete for a message we don't already own is dropped earlier
-  // regardless (handlePushedMessage in watcher/index.ts).
+  // regardless (handlePushedMessage in ./index.ts).
   //
   // TODO: if a real reaction payload is ever captured (e.g. by logging
   // JSON.stringify(notification) here for a while and watching for one),

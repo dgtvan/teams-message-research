@@ -1,0 +1,37 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "${BOT_ID}",
+  "developer": {
+    "name": "Local Watcher",
+    "websiteUrl": "https://example.invalid/watcher",
+    "privacyUrl": "https://example.invalid/watcher/privacy",
+    "termsOfUseUrl": "https://example.invalid/watcher/terms"
+  },
+  "name": {
+    "short": "Message Watcher",
+    "full": "Local Message Watcher Bot"
+  },
+  "description": {
+    "short": "Records messages in groups it is added to.",
+    "full": "A personal, locally-hosted bot that records messages, edits and deletes in the groups and channels it is added to, and can post messages back. Not a published app; sideloaded for personal use."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#2F5B8C",
+  "bots": [
+    {
+      "botId": "${BOT_ID}",
+      "scopes": ["personal", "groupChat", "team"],
+      "isNotificationOnly": false,
+      "supportsFiles": false,
+      "supportsCalling": false,
+      "supportsVideo": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}
